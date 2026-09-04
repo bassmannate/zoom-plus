@@ -1,0 +1,488 @@
+/**
+ * Procedurally generated, per-effect icons.
+ *
+ * Rather than one fixed icon per effect subtype (chorus/phaser/etc all
+ * looking identical to each other), each effect's icon is generated
+ * from:
+ *   1. Real facts about that specific effect - its parameter count,
+ *      and whether specific parameters exist (Cabinet, Bright, Rate,
+ *      Depth, Feedback, etc.) - pulled from the bundled effect mapping
+ *      data, not guessed.
+ *   2. A deterministic hash of the effect's name, used to vary things
+ *      like curvature, spacing, and rotation - so two effects with the
+ *      same parameter *shape* still render distinguishably rather than
+ *      identically.
+ *
+ * This is original, generated artwork - explicitly NOT an attempt to
+ * recreate the appearance of any real branded product (see the
+ * conversation this was built in: recreating e.g. the Ampeg B-15's
+ * actual portaflex silhouette would be trade dress territory, not just
+ * copyright, so icons vary by generic/functional traits - speaker
+ * count, control density - never by brand-specific cosmetic details).
+ *
+ * The function is pure: the same effect (same id + name + parameters)
+ * always renders the same icon. It's not random per render - it's
+ * seeded by the effect's own data.
+ */
+
+// --- deterministic hash + seeded fractions ---------------------------
+
+function hashString(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// A different, stable pseudo-random fraction (0..1) per (hash, salt) pair -
+// lets multiple independent "random" choices be derived from one hash.
+function seedFrac(hash, salt) {
+  const x = Math.imul(hash ^ salt, 2654435761) >>> 0;
+  return ((x >>> 8) % 10000) / 10000;
+}
+
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+
+// --- reading real facts about the effect ------------------------------
+
+function paramCount(info) {
+  return info?.parameters?.length ?? 4;
+}
+
+function hasParam(info, pattern) {
+  return !!info?.parameters?.some((p) => pattern.test(p.name || ""));
+}
+
+// --- shape-family generators --------------------------------------------
+// Each returns inner SVG markup for a 24x24 viewBox. `hash` seeds the
+// continuous variation; the other args are real per-effect facts.
+
+function waveFamily(hash, n, ampBase, style) {
+  n = clamp(n, 3, 7);
+  const jitter = seedFrac(hash, 1) * 0.6 + 0.7; // 0.7..1.3
+  const amp = ampBase * jitter;
+  const step = 20 / n;
+  let d = `M2 12`;
+  for (let i = 0; i < n; i++) {
+    const cx = 2 + step * (i + 0.5);
+    const dir = i % 2 === 0 ? -1 : 1;
+    const localAmp = amp * (0.75 + seedFrac(hash, 10 + i) * 0.5);
+    d += ` Q${cx.toFixed(1)} ${(12 + dir * localAmp).toFixed(1)} ${(2 + step * (i + 1)).toFixed(1)} 12`;
+  }
+  let extra = "";
+  if (style === "clipped") {
+    extra = `<path d="M3 6h18M3 18h18" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.5"/>`;
+  } else if (style === "ceiling") {
+    extra = `<path d="M3 5h18" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6"/>`;
+  }
+  return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>${extra}`;
+}
+
+function jaggedFamily(hash, n) {
+  n = clamp(n, 4, 8);
+  const step = 20 / n;
+  let d = `M2 ${(12 + (seedFrac(hash, 2) - 0.5) * 4).toFixed(1)}`;
+  for (let i = 1; i <= n; i++) {
+    const y = 12 + (i % 2 === 0 ? -1 : 1) * (5 + seedFrac(hash, 20 + i) * 4);
+    d += ` L${(2 + step * i).toFixed(1)} ${y.toFixed(1)}`;
+  }
+  return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+}
+
+function oscFamily(hash, n, ampScale, voices) {
+  n = clamp(n, 3, 6);
+  let out = "";
+  for (let v = 0; v < voices; v++) {
+    const yOff = v * (2 + seedFrac(hash, 30 + v) * 2);
+    const opacity = v === 0 ? 1 : 0.5 - v * 0.15;
+    const step = 20 / n;
+    let d = `M2 ${(12 + yOff).toFixed(1)}`;
+    for (let i = 0; i < n; i++) {
+      const cx = 2 + step * (i + 0.5);
+      const dir = i % 2 === 0 ? -1 : 1;
+      d += ` Q${cx.toFixed(1)} ${(12 + yOff + dir * ampScale).toFixed(1)} ${(2 + step * (i + 1)).toFixed(1)} ${(12 + yOff).toFixed(1)}`;
+    }
+    out += `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="${opacity.toFixed(2)}"/>`;
+  }
+  return out;
+}
+
+function circleCascade(hash, n, shrinking) {
+  n = clamp(n, 2, 5);
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const t = n <= 1 ? 0 : i / (n - 1);
+    const r = shrinking ? 2.4 - t * 1.1 : 1.3 + t * 1.1;
+    const cx = 4 + t * 16 + (seedFrac(hash, 40 + i) - 0.5) * 1.2;
+    const op = shrinking ? 1 - t * 0.65 : 0.35 + t * 0.65;
+    out += i === 0
+      ? `<circle cx="${cx.toFixed(1)}" cy="12" r="${r.toFixed(1)}" fill="currentColor" opacity="${op.toFixed(2)}"/>`
+      : `<circle cx="${cx.toFixed(1)}" cy="12" r="${r.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.4" opacity="${op.toFixed(2)}"/>`;
+  }
+  return out;
+}
+
+function reverbArcs(hash, n) {
+  n = clamp(n, 2, 5);
+  let out = `<circle cx="4" cy="12" r="1.5" fill="currentColor"/>`;
+  for (let i = 1; i <= n; i++) {
+    const bulge = 2.6 + i * 1.4 + seedFrac(hash, 50 + i) * 1.6;
+    const yTop = 12 - bulge / 1.6;
+    const op = Math.max(0.15, 0.85 - i * 0.16);
+    out += `<path d="M${(2 + i * 2.2).toFixed(1)} ${yTop.toFixed(1)}c${(bulge * 0.5).toFixed(1)} ${(bulge * 0.3).toFixed(1)} ${(bulge * 0.5).toFixed(1)} ${(bulge * 1.3).toFixed(1)} 0 ${(bulge * 1.6).toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="${op.toFixed(2)}"/>`;
+  }
+  return out;
+}
+
+function sliderFamily(hash, n) {
+  n = clamp(n, 2, 6);
+  const step = 20 / (n + 1);
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const x = 2 + step * (i + 1);
+    const dotY = 5 + seedFrac(hash, 60 + i) * 14;
+    out += `<path d="M${x.toFixed(1)} 3v18" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.5"/>` +
+           `<circle cx="${x.toFixed(1)}" cy="${dotY.toFixed(1)}" r="1.7" fill="currentColor"/>`;
+  }
+  return out;
+}
+
+function ampFamily(hash, speakerCount, wide, format) {
+  speakerCount = clamp(speakerCount, 1, 4);
+  const rx = 0.8 + seedFrac(hash, 71) * 1.4;
+  const rowMajorSeed = seedFrac(hash, 72);
+
+  function speakerGrid(x0, y0, w, h, count) {
+    let out = "";
+    const cols = count <= 2 ? count : 2;
+    const rows = Math.ceil(count / cols);
+    const cellW = w / cols, cellH = h / rows;
+    const cells = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push([r, c]);
+    if (rowMajorSeed <= 0.5) cells.reverse();
+    let i = 0;
+    for (const [r, c] of cells) {
+      if (i >= count) break;
+      const cx = x0 + cellW * (c + 0.5);
+      const cy = y0 + cellH * (r + 0.5);
+      const rad = Math.min(cellW, cellH) / 2 - 1.0 + seedFrac(hash, 73 + i) * 1.0;
+      out += `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${Math.max(0.8, rad).toFixed(2)}" fill="none" stroke="currentColor" stroke-width="1.2"/>`;
+      i++;
+    }
+    return out;
+  }
+
+  function panel(x0, y0, w, h, knobCount) {
+    // a thin control-panel strip with knob dots - used atop cabs/heads
+    let out = `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="${(rx * 0.6).toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
+    const n = clamp(knobCount, 2, 6);
+    const step = w / (n + 1);
+    for (let i = 0; i < n; i++) {
+      const cx = x0 + step * (i + 1);
+      const cy = y0 + h / 2;
+      out += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${(h * 0.22).toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1"/>`;
+    }
+    return out;
+  }
+
+  switch (format) {
+    case "stack2": { // separate head unit on top of one cabinet below
+      const headH = 5.5;
+      const bodyW = wide ? 19 : 15, x0 = wide ? 2.5 : 4.5;
+      let out = `<rect x="${x0}" y="3" width="${bodyW}" height="${headH}" rx="${(rx * 0.6).toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.4"/>`;
+      out += panel(x0 + 1, 4, bodyW - 2, headH - 2, clamp(speakerCount + 1, 2, 5));
+      out += `<rect x="${x0}" y="${3 + headH + 0.8}" width="${bodyW}" height="${16 - headH}" rx="${rx.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+      out += speakerGrid(x0, 3 + headH + 0.8, bodyW, 16 - headH, speakerCount);
+      return out;
+    }
+    case "stack3": { // head atop two stacked cabinets - "full stack" silhouette
+      const headH = 4, cabH = 6.5;
+      const bodyW = wide ? 18 : 14, x0 = wide ? 3 : 5;
+      let out = `<rect x="${x0}" y="1.5" width="${bodyW}" height="${headH}" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
+      out += panel(x0 + 0.8, 2.2, bodyW - 1.6, headH - 1.4, clamp(speakerCount + 1, 2, 4));
+      let y = 1.5 + headH + 0.6;
+      const perCab = Math.ceil(speakerCount / 2);
+      out += `<rect x="${x0}" y="${y.toFixed(1)}" width="${bodyW}" height="${cabH}" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
+      out += speakerGrid(x0, y, bodyW, cabH, Math.min(perCab, speakerCount));
+      y += cabH + 0.5;
+      out += `<rect x="${x0}" y="${y.toFixed(1)}" width="${bodyW}" height="${cabH}" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
+      out += speakerGrid(x0, y, bodyW, cabH, Math.min(speakerCount - perCab, speakerCount) || 1);
+      return out;
+    }
+    case "rack": { // 1U-style rack preamp - wide, short, no visible speaker
+      const y0 = 8 + seedFrac(hash, 76) * 3;
+      let out = `<rect x="2" y="${y0.toFixed(1)}" width="20" height="7" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.4"/>`;
+      const n = clamp(speakerCount + 2, 3, 7);
+      const step = 18 / (n + 1);
+      for (let i = 0; i < n; i++) {
+        const cx = 3 + step * (i + 1);
+        out += `<circle cx="${cx.toFixed(1)}" cy="${(y0 + 3.5).toFixed(1)}" r="0.9" fill="currentColor" opacity="0.8"/>`;
+      }
+      out += `<circle cx="20" cy="${y0.toFixed(1)}" r="0.6" fill="currentColor"/>`; // power LED
+      return out;
+    }
+    case "tallCombo": { // narrower, taller, portable-looking combo - single speaker
+      const w = 12, x0 = 6 + (seedFrac(hash, 77) - 0.5) * 2;
+      let out = `<rect x="${x0.toFixed(1)}" y="3" width="${w}" height="18" rx="${rx.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+      out += panel(x0 + 1, 4.2, w - 2, 3, clamp(speakerCount + 1, 2, 4));
+      out += speakerGrid(x0, 8.5, w, 11.5, 1);
+      return out;
+    }
+    default: { // "combo" - single box, amp panel on top, speaker(s) below
+      const w = wide ? 19 : 15, x0 = wide ? 2.5 : 4.5;
+      let out = `<rect x="${x0}" y="5" width="${w}" height="14" rx="${rx.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+      out += speakerGrid(x0, 5, w, 14, speakerCount);
+      return out;
+    }
+  }
+}
+
+function chooseAmpFormat(hash, hasCabinet) {
+  const options = hasCabinet
+    ? ["combo", "combo", "stack2", "stack3", "tallCombo"] // weighted toward combo/stack since it has a real cab
+    : ["combo", "rack", "rack", "tallCombo"]; // no cabinet param - lean toward head/rack/compact
+  const idx = Math.floor(seedFrac(hash, 78) * options.length);
+  return options[Math.min(idx, options.length - 1)];
+}
+
+function boxFamily(hash) {
+  // preamp / DI - a gain-stage triangle, size/position nudged by seed
+  const nudge = (seedFrac(hash, 80) - 0.5) * 2;
+  return `<path d="M${(4 + nudge).toFixed(1)} 6v12l14-6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>`;
+}
+
+function starFamily(hash, points) {
+  points = clamp(points, 4, 9);
+  const cx = 12, cy = 12, rOuter = 9, rInner = 3.5 + seedFrac(hash, 90) * 2;
+  const rot = seedFrac(hash, 91) * (Math.PI * 2);
+  let d = "";
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? rOuter : rInner;
+    const a = rot + (Math.PI * i) / points;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    d += (i === 0 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1) + " ";
+  }
+  return `<path d="${d}Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>`;
+}
+
+function squareWaveFamily(hash, n) {
+  n = clamp(n, 3, 6);
+  const step = 20 / n;
+  let d = `M2 15`;
+  for (let i = 0; i < n; i++) {
+    const up = i % 2 === 0;
+    const h = 6 + seedFrac(hash, 100 + i) * 4;
+    const x0 = 2 + step * i, x1 = 2 + step * (i + 1);
+    d += ` V${up ? (15 - h).toFixed(1) : 15} H${x1.toFixed(1)}`;
+  }
+  return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>`;
+}
+
+function arrowFamily(hash, up, down, ringmod) {
+  if (ringmod) {
+    const sep = 4 + seedFrac(hash, 110) * 2.5;
+    return `<circle cx="${(12 - sep).toFixed(1)}" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>` +
+           `<circle cx="${(12 + sep).toFixed(1)}" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+  }
+  const h1 = 8 + seedFrac(hash, 111) * 4;
+  let out = "";
+  if (down) out += `<path d="M6 ${(18 - h1 + 8).toFixed(1)}V8m0 0-3 3m3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  if (up) out += `<path d="M17 6v10m0 0-3-3m3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return out;
+}
+
+function pedalFamily(hash) {
+  const tilt = (seedFrac(hash, 120) - 0.5) * 3;
+  return `<path d="M${(4 + tilt).toFixed(1)} 18h16l-5-10H${(9 + tilt).toFixed(1)}z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>`;
+}
+
+function gateFamily(hash, n) {
+  n = clamp(n, 3, 6);
+  const step = 20 / (n - 1 || 1);
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const x = 2 + step * i;
+    out += `<path d="M${x.toFixed(1)} 4v16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+  }
+  return out;
+}
+
+function pipesFamily(hash, n) {
+  n = clamp(n, 4, 7);
+  const step = 20 / (n - 1 || 1);
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const x = 2 + step * i;
+    const h = 8 + seedFrac(hash, 130 + i) * 12;
+    out += `<path d="M${x.toFixed(1)} 20V${(20 - h).toFixed(1)}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+  }
+  return out;
+}
+
+// --- category/subtype classification (unchanged logic from before) -------
+
+const PREFIX_CATEGORY = {
+  0x23: { // MS-50G+
+    "01": "dynamics", "02": "filter", "03": "drive", "04": "amp",
+    "06": "modulation", "07": "sfx", "08": "delay", "09": "reverb",
+  },
+  0x27: { // MS-60B+
+    "01": "dynamics", "02": "filter", "03": "drive", "04": "amp", "05": "amp",
+    "06": "modulation", "07": "pitch", "08": "synth", "09": "sfx",
+    "0a": "delay", "0b": "reverb",
+  },
+  // MS-70CDR+: model number unconfirmed - see README/app.js for how to add it.
+};
+
+const SUBTYPE_RULES = {
+  dynamics: [[/limit/i, "limiter"], [/gate|noise|\bnr\b/i, "gate"]],
+  drive: [[/fuzz/i, "fuzz"], [/dist/i, "distortion"], [/boost/i, "boost"]],
+  filter: [[/wah/i, "wah"], [/\beq\b|geq|peq/i, "eq"]],
+  modulation: [
+    [/cho/i, "chorus"], [/phase/i, "phaser"], [/flang/i, "flanger"],
+    [/rotary|leslie/i, "rotary"], [/vibe|vibrato/i, "vibrato"], [/trem/i, "tremolo"],
+  ],
+  delay: [[/tape/i, "tape-echo"], [/analog/i, "analog-delay"]],
+  reverb: [[/spring/i, "spring-reverb"], [/plate/i, "plate-reverb"], [/hall/i, "hall-reverb"]],
+  pitch: [[/ringmod/i, "ring-mod"], [/oct/i, "octave"]],
+  amp: [[/cabinet|\bcab\b/i, "cabinet"], [/preamp|\bdi\b/i, "preamp"]],
+  sfx: [[/organ/i, "organ"]],
+};
+
+const PITCH_OVERRIDE = /oct|pitch|\bhps\b|polyshift|ringmod|geminos/i;
+const SYNTH_OVERRIDE = /synth|organ/i;
+
+export function categorize(modelNumberByte, id, name) {
+  const table = PREFIX_CATEGORY[modelNumberByte];
+  const prefix = (id >>> 0).toString(16).padStart(8, "0").slice(0, 2);
+  let category = table?.[prefix];
+  if (!category) return "fx";
+  if (category === "modulation" && PITCH_OVERRIDE.test(name)) return "pitch";
+  if (category === "sfx" && SYNTH_OVERRIDE.test(name)) return "synth";
+  return category;
+}
+
+function subtypeFor(category, name) {
+  const rules = SUBTYPE_RULES[category];
+  if (!rules) return category;
+  for (const [pattern, key] of rules) {
+    if (pattern.test(name)) return key;
+  }
+  return category;
+}
+
+// --- putting it together --------------------------------------------------
+
+function buildIconInner(category, subtype, hash, info) {
+  const n = paramCount(info);
+
+  switch (subtype) {
+    case "limiter": return waveFamily(hash, n, 4.5, "ceiling");
+    case "gate": return gateFamily(hash, n);
+    case "dynamics": return waveFamily(hash, n, 5, "normal");
+
+    case "fuzz": return jaggedFamily(hash, n);
+    case "distortion": return waveFamily(hash, n, 5, "clipped");
+    case "boost": return gateFamily(hash, Math.min(n, 4)); // reuse bar-rise look via ascending bars below
+    case "drive": return waveFamily(hash, n, 4, "clipped");
+
+    case "wah": return pedalFamily(hash);
+    case "eq": return sliderFamily(hash, n);
+    case "filter": return waveFamily(hash, n, 6, "normal");
+
+    case "chorus": return oscFamily(hash, n, 3.5, 2);
+    case "phaser": {
+      const rInner = 3.5 + seedFrac(hash, 5) * 1.5;
+      return `<circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>` +
+             `<circle cx="12" cy="12" r="${rInner.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+    }
+    case "flanger": return oscFamily(hash, n, 4.5, 1) +
+      `<path d="M17 6l3 1-1 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+    case "rotary": {
+      const spokes = clamp(n, 3, 5);
+      let out = `<circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+      for (let i = 0; i < spokes; i++) {
+        const a = (Math.PI * 2 * i) / spokes + seedFrac(hash, 6) * Math.PI;
+        out += `<path d="M12 12L${(12 + Math.cos(a) * 6).toFixed(1)} ${(12 + Math.sin(a) * 6).toFixed(1)}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+      }
+      return out;
+    }
+    case "vibrato": return `<path d="M9 2c4 2 4 4 0 6s-4 4 0 6 4 4 0 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+    case "tremolo": return gateFamily(hash, clamp(n, 3, 5));
+    case "modulation": return oscFamily(hash, n, 3.5, 1);
+
+    case "tape-echo": return circleCascade(hash, Math.min(n, 3), false) + `<path d="M11 12h2" stroke="currentColor" stroke-width="1.5"/>`;
+    case "analog-delay": return circleCascade(hash, n, true);
+    case "delay": return circleCascade(hash, n, true);
+
+    case "spring-reverb": return jaggedFamily(hash, clamp(n, 5, 8));
+    case "plate-reverb": return sliderFamily(hash, Math.min(n, 3));
+    case "hall-reverb": return `<path d="M4 20V10a8 6 0 0 1 16 0v10" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+    case "reverb": return reverbArcs(hash, n);
+
+    case "ring-mod": return arrowFamily(hash, false, false, true);
+    case "octave": return arrowFamily(hash, true, true, false);
+    case "pitch": return arrowFamily(hash, true, hasParam(info, /down|low/i) || true, false);
+
+    case "cabinet": return ampFamily(hash, clamp(n - 2, 1, 4), true, chooseAmpFormat(hash, true));
+    case "preamp": return boxFamily(hash);
+    case "amp": {
+      const hasCabinet = hasParam(info, /cabinet|cab\b/i);
+      const speakers = hasCabinet ? clamp(n - 3, 2, 4) : clamp(Math.ceil(n / 3), 1, 3);
+      const wide = hasCabinet || n >= 8;
+      const format = chooseAmpFormat(hash, hasCabinet);
+      return ampFamily(hash, speakers, wide, format);
+    }
+
+    case "synth": return squareWaveFamily(hash, n);
+
+    case "organ": return pipesFamily(hash, n);
+    case "sfx": return starFamily(hash, clamp(n, 4, 7));
+
+    default: {
+      const rot = seedFrac(hash, 200) * 40 - 20;
+      return `<g transform="rotate(${rot.toFixed(1)} 12 12)"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></g>`;
+    }
+  }
+}
+
+// --- Hand-drawn overrides -----------------------------------------------
+// Draw your own icon for a specific effect and it takes priority over the
+// generator entirely. Key by the effect's hex id (the same 8-char hex
+// string used as keys in the zoom-effect-mappings-*.json files, e.g.
+// "01000010" for the first Dynamics effect) - easiest way to find an id:
+// open the relevant JSON file and search for the effect's `name`.
+//
+// Each entry is just the INNER svg markup (no outer <svg> tag) for a
+// 24x24 viewBox - use `currentColor` for stroke/fill so it automatically
+// follows the module's normal/hover/selected color, the same as every
+// generated icon does.
+//
+// Example - a hand-drawn icon for SMR400 (id "05000000" on the MS-60B+):
+//   "05000000": `<rect x="3" y="6" width="18" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+//                <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/>`,
+export const EFFECT_ICON_OVERRIDES = {
+  // "hexid": `<svg markup>`,
+};
+
+export function iconSvgFor(modelNumberByte, id, info) {
+  const key = (id >>> 0).toString(16).padStart(8, "0");
+  const override = EFFECT_ICON_OVERRIDES[key];
+  if (override) {
+    return `<svg viewBox="0 0 24 24" width="30" height="30">${override}</svg>`;
+  }
+
+  const name = info?.name || "";
+  const category = categorize(modelNumberByte, id, name);
+  const subtype = subtypeFor(category, name);
+  const hash = hashString(name || String(id));
+  const inner = buildIconInner(category, subtype, hash, info);
+  // Modest per-effect rotation (not purely decorative - it's a cheap,
+  // broad-range differentiator that catches cases where two effects'
+  // structural parameters happen to coincide, e.g. same param count and
+  // same detected flags, which does happen across a 100+ effect list).
+  const rotation = (seedFrac(hash, 999) - 0.5) * 26; // -13..+13 degrees
+  return `<svg viewBox="0 0 24 24" width="30" height="30"><g transform="rotate(${rotation.toFixed(1)} 12 12)">${inner}</g></svg>`;
+}

@@ -1,0 +1,432 @@
+/* ---------------------------------------------------------------------
+   Design tokens
+
+   Concept: a hardware rack unit, not a SaaS dashboard. The patch editor
+   renders effects as a physical signal chain - modules wired left to
+   right, the way pedals actually sit on a board - rather than a generic
+   settings list. One warm accent (brass, like a vintage amp indicator
+   LED) carries all emphasis; a cooler teal is reserved for verified/
+   connected states so it reads as "signal ok", not decoration.
+------------------------------------------------------------------------ */
+:root {
+  --bg-deep: #17181A;
+  --panel: #1F2123;
+  --panel-raised: #26282B;
+  --line: #34373A;
+  --line-soft: #2A2C2F;
+
+  --text-primary: #ECE9E2;
+  --text-muted: #8B8D91;
+  --text-faint: #5B5D61;
+
+  --accent-brass: #C99A44;
+  --accent-brass-dim: #7A6132;
+  --accent-teal: #4FA8A0;
+  --accent-red: #C1554A;
+
+  --font-sans: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+
+  --radius: 6px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font-family: inherit; }
+input { font-family: inherit; color: inherit; }
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* --- Top bar ---------------------------------------------------------- */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 0 18px;
+  height: 56px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+#connection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.led {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.led-off { background: var(--text-faint); }
+.led-on {
+  background: var(--accent-teal);
+  box-shadow: 0 0 6px 1px rgba(79, 168, 160, 0.55);
+}
+.led-error {
+  background: var(--accent-red);
+  box-shadow: 0 0 6px 1px rgba(193, 85, 74, 0.5);
+}
+
+#conn-label { color: var(--text-muted); font-size: 13px; }
+
+#patch-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+#patch-number {
+  font-family: var(--font-mono);
+  color: var(--accent-brass);
+  font-size: 13px;
+  min-width: 24px;
+}
+
+#patch-name {
+  background: none;
+  border: none;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+  padding: 4px 2px;
+  border-bottom: 1px solid transparent;
+  min-width: 0;
+  flex: 1;
+  max-width: 320px;
+}
+#patch-name:focus { outline: none; border-bottom-color: var(--accent-brass); }
+#patch-name:disabled { color: var(--text-faint); }
+
+#patch-tempo-wrap {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+#patch-tempo { color: var(--text-primary); }
+
+#transport { display: flex; gap: 8px; }
+
+.btn {
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  color: var(--text-primary);
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent-brass-dim); }
+.btn:disabled { color: var(--text-faint); cursor: default; }
+.btn-primary {
+  background: var(--accent-brass);
+  border-color: var(--accent-brass);
+  color: #1B1602;
+  font-weight: 500;
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* --- Body layout ------------------------------------------------------- */
+
+#body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+#sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+#sidebar-header {
+  padding: 14px 16px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+#patch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 16px;
+}
+
+#patch-list li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text-muted);
+}
+#patch-list li:hover { background: var(--panel-raised); }
+#patch-list li.active {
+  background: var(--panel-raised);
+  color: var(--text-primary);
+}
+#patch-list li.active .p-num { color: var(--accent-brass); }
+
+.p-num {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+  width: 22px;
+  flex-shrink: 0;
+}
+.p-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.empty-state {
+  margin: auto;
+  text-align: center;
+  color: var(--text-muted);
+}
+.empty-state p { margin: 4px 0; }
+.empty-state .muted { color: var(--text-faint); font-size: 13px; }
+
+.hidden { display: none !important; }
+
+#chain-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* --- Signal chain ------------------------------------------------------ */
+
+#chain {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 40px 32px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.module {
+  --module-w: 108px;
+  width: var(--module-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.module-body {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  color: var(--text-faint);
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.module:hover .module-body { border-color: var(--line); background: #2B2D30; }
+.module.selected .module-body {
+  border-color: var(--accent-brass);
+  box-shadow: 0 0 0 1px var(--accent-brass-dim);
+  color: var(--accent-brass);
+}
+.module.enabled .module-body { color: var(--text-muted); }
+.module.enabled.selected .module-body { color: var(--accent-brass); }
+
+.module-led {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.module.enabled .module-led {
+  background: var(--accent-teal);
+  box-shadow: 0 0 5px 1px rgba(79, 168, 160, 0.55);
+}
+
+.module-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 0 6px;
+  line-height: 1.25;
+}
+.module.selected .module-label { color: var(--text-primary); }
+
+/* the wire between modules */
+.wire {
+  height: 1px;
+  background: var(--line);
+  flex: 0 0 20px;
+  align-self: center;
+  margin-top: -32px; /* align with the module body's vertical center-ish */
+}
+
+/* --- Detail / knob panel ------------------------------------------------ */
+
+#detail {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 20px 32px 28px;
+  flex-shrink: 0;
+}
+
+#detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+#detail-name {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+#detail-bypass-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+#detail-knobs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+}
+
+.knob-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 76px;
+  user-select: none;
+}
+
+.knob {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 45%, #313336 0%, #202224 70%),
+    conic-gradient(var(--accent-brass) calc(var(--pct, 0) * 1%), var(--line-soft) 0);
+  position: relative;
+  cursor: ns-resize;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.knob::before {
+  /* inner face, masks the conic-gradient ring down to a thin arc */
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  background: #202224;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+}
+.knob::after {
+  /* indicator line */
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  width: 2px;
+  height: 12px;
+  background: var(--accent-brass);
+  border-radius: 1px;
+  transform-origin: 50% 20px; /* rotates around knob center (28-8) */
+  transform: translateX(-50%) rotate(var(--angle, -135deg));
+}
+
+.knob-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.knob-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* Real, controllable parameters the community's reverse-engineering
+   found but couldn't identify the purpose of (see the tooltip). Dimmed
+   and dashed rather than hidden outright - they're still fully
+   editable, just honestly marked as "we don't know what this does". */
+.knob-unit.undocumented .knob-name::after {
+  content: " ?";
+  color: var(--accent-brass);
+}
+.knob-unit.undocumented .knob {
+  opacity: 0.55;
+  box-shadow: inset 0 0 0 1px var(--line), 0 0 0 1px dashed transparent;
+  outline: 1px dashed var(--text-faint);
+  outline-offset: 3px;
+}
+
+/* --- Status bar ---------------------------------------------------------- */
+
+#statusbar {
+  height: 26px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+#crc-indicator { font-family: var(--font-mono); }
+#crc-indicator.ok { color: var(--accent-teal); }
+#crc-indicator.bad { color: var(--accent-red); }

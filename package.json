@@ -1,0 +1,25 @@
+{
+  "name": "signal-chain",
+  "version": "0.1.0",
+  "description": "A native desktop patch editor for the Zoom MS Plus pedal series",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.example.signalchain",
+    "productName": "Signal Chain",
+    "files": ["main.js", "preload.js", "renderer/**/*"],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "AudioVideo"
+    }
+  }
+}
