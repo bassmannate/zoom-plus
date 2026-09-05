@@ -156,13 +156,13 @@ function sliderFamily(hash, n) {
 }
 
 function ampFamily(hash, speakerCount, wide, format, info) {
-  speakerCount = clamp(speakerCount, 1, 4);
+  speakerCount = clamp(speakerCount, 1, 8); // was capped at 4 - couldn't represent an 8x10 cab at all
   const rx = 0.5 + seedFrac(hash, 71) * 0.8; // tighter than before - high rounding was reading as "blobby" at small sizes
   const rowMajorSeed = seedFrac(hash, 72);
 
   function speakerGrid(x0, y0, w, h, count) {
     let out = "";
-    const cols = count <= 2 ? count : 2;
+    const cols = count <= 2 ? count : count <= 4 ? 2 : 4;
     const rows = Math.ceil(count / cols);
     const cellW = w / cols, cellH = h / rows;
     const cells = [];
@@ -173,8 +173,8 @@ function ampFamily(hash, speakerCount, wide, format, info) {
       if (i >= count) break;
       const cx = x0 + cellW * (c + 0.5);
       const cy = y0 + cellH * (r + 0.5);
-      const rad = Math.min(cellW, cellH) / 2 - 1.0 + seedFrac(hash, 73 + i) * 1.0;
-      out += `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${Math.max(0.8, rad).toFixed(2)}" fill="none" stroke="currentColor" stroke-width="1.2"/>`;
+      const rad = Math.min(cellW, cellH) / 2 - 0.6 + seedFrac(hash, 73 + i) * 0.6;
+      out += `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${Math.max(0.6, rad).toFixed(2)}" fill="none" stroke="currentColor" stroke-width="1.1"/>`;
       i++;
     }
     return out;
@@ -253,7 +253,21 @@ function ampFamily(hash, speakerCount, wide, format, info) {
   }
 }
 
-function chooseAmpFormat(hash, hasCabinet) {
+// A small number of user-confirmed real speaker-configuration facts,
+// used to correct the generated icon's speaker count for specific
+// effects where the default paramCount-based guess was wrong. These are
+// factual specs (how many speakers a real amp has), not appearance -
+// still rendered through the same abstract box-and-circles vocabulary,
+// not a recreation of any real product's look. Deliberately minimal -
+// only added when actually confirmed, not guessed at.
+const KNOWN_SPEAKER_COUNTS = {
+  "FlipTop": 1,   // single 15" combo
+  "AMPG SVT": 8,  // 8x10" cab pairing
+};
+
+function chooseAmpFormat(hash, hasCabinet, forcedCount) {
+  if (forcedCount === 1) return "combo"; // single big speaker reads cleanest in the plain box, no extra panel clutter
+  if (forcedCount >= 6) return "combo"; // a wide box with the 4x2 grid is clearer than splitting an 8-speaker wall across stacked tiers
   const options = hasCabinet
     ? ["combo", "combo", "stack2", "stack3", "tallCombo"] // weighted toward combo/stack since it has a real cab
     : ["combo", "rack", "rack", "tallCombo"]; // no cabinet param - lean toward head/rack/compact
@@ -265,6 +279,45 @@ function boxFamily(hash) {
   // preamp / DI - a gain-stage triangle, size/position nudged by seed
   const nudge = (seedFrac(hash, 80) - 0.5) * 2;
   return `<path d="M${(4 + nudge).toFixed(1)} 6v12l14-6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>`;
+}
+
+function pedalBoxFamily(hash, info) {
+  // Generic horizontal stompbox silhouette - a rounded rectangle with
+  // knob dots across the top (sized from each parameter's real range,
+  // same approach as the rack format) and a footswitch dot at the
+  // bottom. This is the shared, generic shape of essentially every
+  // guitar/bass pedal ever made - not evocative of any single brand's
+  // distinctive cosmetic design. Used for "amp" category effects that
+  // don't actually have a Cabinet parameter (DI boxes, preamps) - those
+  // aren't simulating a speaker at all, so they shouldn't render with
+  // speaker circles like a combo/stack does.
+  const params = (info?.parameters || []).slice(0, 6);
+  const n = Math.max(params.length, 2);
+  const w = 19, x0 = 2.5, y0 = 3.5, h = 12;
+  const rx = 0.6 + seedFrac(hash, 81) * 0.8;
+  let out = `<rect x="${x0}" y="${y0}" width="${w}" height="${h}" rx="${rx.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.4"/>`;
+  const step = w / (n + 1);
+  for (let i = 0; i < n; i++) {
+    // Real per-parameter max drives the base size, but many different
+    // amp-head sims share an identical control template (same param
+    // names/ranges), so real data alone isn't always enough to tell
+    // them apart - hash-seeded jitter on top ensures two effects with
+    // an identical parameter signature still render distinguishably.
+    const cx = x0 + step * (i + 1) + (seedFrac(hash, 82 + i) - 0.5) * (step * 0.3);
+    const cy = y0 + h * 0.42;
+    const max = params[i]?.max ?? 10;
+    const baseR = 0.7 + clamp(Math.log2(max + 1) / 9, 0, 1) * 0.9;
+    const r = baseR + seedFrac(hash, 90 + i) * 0.5;
+    out += `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="currentColor" stroke-width="1.1"/>`;
+  }
+  out += `<circle cx="12" cy="${(y0 + h - 1.8).toFixed(1)}" r="1.5" fill="currentColor" opacity="0.85"/>`;
+  // Sloped-panel accent line - many stompbox enclosures have an angled
+  // top face rather than a flat one, purely a generic ergonomic
+  // convention (better knob visibility when the pedal's on the floor),
+  // not any one manufacturer's distinctive shape.
+  const bendX = x0 + w * (0.55 + seedFrac(hash, 95) * 0.15);
+  out += `<path d="M${x0.toFixed(1)} ${(y0 + h * 0.72).toFixed(1)}H${bendX.toFixed(1)}L${(bendX + 2).toFixed(1)} ${(y0 + h * 0.9).toFixed(1)}H${(x0 + w).toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4"/>`;
+  return out;
 }
 
 function starFamily(hash, points) {
@@ -586,9 +639,17 @@ function buildIconInner(category, subtype, hash, info) {
     case "preamp": return boxFamily(hash);
     case "amp": {
       const hasCabinet = hasParam(info, /cabinet|cab\b/i);
-      const speakers = hasCabinet ? clamp(n - 3, 2, 4) : clamp(Math.ceil(n / 3), 1, 3);
-      const wide = hasCabinet || n >= 8;
-      const format = chooseAmpFormat(hash, hasCabinet);
+      if (!hasCabinet) {
+        // No Cabinet parameter means this effect isn't simulating a
+        // speaker at all (a DI box, preamp, or similar) - it shouldn't
+        // render with speaker circles like a combo/stack does. Generic
+        // stompbox shape instead.
+        return pedalBoxFamily(hash, info);
+      }
+      const known = KNOWN_SPEAKER_COUNTS[info?.name];
+      const speakers = known ?? clamp(n - 3, 2, 4);
+      const wide = true; // hasCabinet is always true in this branch (see the return above)
+      const format = chooseAmpFormat(hash, hasCabinet, known);
       return ampFamily(hash, speakers, wide, format, info);
     }
 
