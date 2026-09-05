@@ -93,6 +93,7 @@ function jaggedFamily(hash, n) {
 
 function oscFamily(hash, n, ampScale, voices) {
   n = clamp(n, 3, 6);
+  const phaseShift = seedFrac(hash, 29) * 0.6; // shifts the whole wave's starting point
   let out = "";
   for (let v = 0; v < voices; v++) {
     const yOff = v * (2 + seedFrac(hash, 30 + v) * 2);
@@ -100,9 +101,14 @@ function oscFamily(hash, n, ampScale, voices) {
     const step = 20 / n;
     let d = `M2 ${(12 + yOff).toFixed(1)}`;
     for (let i = 0; i < n; i++) {
-      const cx = 2 + step * (i + 0.5);
+      const cx = 2 + step * (i + 0.5 + phaseShift);
       const dir = i % 2 === 0 ? -1 : 1;
-      d += ` Q${cx.toFixed(1)} ${(12 + yOff + dir * ampScale).toFixed(1)} ${(2 + step * (i + 1)).toFixed(1)} ${(12 + yOff).toFixed(1)}`;
+      // Per-hump amplitude jitter from hash - this is what actually
+      // varies single-voice waves (the old version only varied yOff,
+      // which is zero for voice 0, so single-voice effects with the
+      // same param count rendered byte-identical regardless of name).
+      const localAmp = ampScale * (0.7 + seedFrac(hash, 35 + i) * 0.6);
+      d += ` Q${cx.toFixed(1)} ${(12 + yOff + dir * localAmp).toFixed(1)} ${(2 + step * (i + 1)).toFixed(1)} ${(12 + yOff).toFixed(1)}`;
     }
     out += `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="${opacity.toFixed(2)}"/>`;
   }
@@ -149,9 +155,9 @@ function sliderFamily(hash, n) {
   return out;
 }
 
-function ampFamily(hash, speakerCount, wide, format) {
+function ampFamily(hash, speakerCount, wide, format, info) {
   speakerCount = clamp(speakerCount, 1, 4);
-  const rx = 0.8 + seedFrac(hash, 71) * 1.4;
+  const rx = 0.5 + seedFrac(hash, 71) * 0.8; // tighter than before - high rounding was reading as "blobby" at small sizes
   const rowMajorSeed = seedFrac(hash, 72);
 
   function speakerGrid(x0, y0, w, h, count) {
@@ -213,12 +219,20 @@ function ampFamily(hash, speakerCount, wide, format) {
     }
     case "rack": { // 1U-style rack preamp - wide, short, no visible speaker
       const y0 = 8 + seedFrac(hash, 76) * 3;
-      let out = `<rect x="2" y="${y0.toFixed(1)}" width="20" height="7" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.4"/>`;
-      const n = clamp(speakerCount + 2, 3, 7);
+      let out = `<rect x="2" y="${y0.toFixed(1)}" width="20" height="7" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
+      // Dot size reflects that specific parameter's real range (max value)
+      // instead of uniform decoration - a preamp with a wide-range Gain
+      // knob draws a visibly bigger dot than one with a narrow-range
+      // switch-like parameter, so two rack units with different real
+      // controls actually look different, not just differently spaced.
+      const params = (info?.parameters || []).slice(0, 7);
+      const n = Math.max(params.length, 3);
       const step = 18 / (n + 1);
       for (let i = 0; i < n; i++) {
         const cx = 3 + step * (i + 1);
-        out += `<circle cx="${cx.toFixed(1)}" cy="${(y0 + 3.5).toFixed(1)}" r="0.9" fill="currentColor" opacity="0.8"/>`;
+        const max = params[i]?.max ?? 10;
+        const r = 0.55 + clamp(Math.log2(max + 1) / 9, 0, 1) * 0.9;
+        out += `<circle cx="${cx.toFixed(1)}" cy="${(y0 + 3.5).toFixed(1)}" r="${r.toFixed(2)}" fill="currentColor" opacity="0.85"/>`;
       }
       out += `<circle cx="20" cy="${y0.toFixed(1)}" r="0.6" fill="currentColor"/>`; // power LED
       return out;
@@ -286,10 +300,13 @@ function arrowFamily(hash, up, down, ringmod) {
     return `<circle cx="${(12 - sep).toFixed(1)}" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>` +
            `<circle cx="${(12 + sep).toFixed(1)}" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
   }
-  const h1 = 8 + seedFrac(hash, 111) * 4;
+  const downLen = 7 + seedFrac(hash, 111) * 5;
+  const upLen = 7 + seedFrac(hash, 112) * 5;
+  const downX = 5 + seedFrac(hash, 113) * 2.5;
+  const upX = 16 + seedFrac(hash, 114) * 2.5;
   let out = "";
-  if (down) out += `<path d="M6 ${(18 - h1 + 8).toFixed(1)}V8m0 0-3 3m3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
-  if (up) out += `<path d="M17 6v10m0 0-3-3m3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  if (down) out += `<path d="M${downX.toFixed(1)} ${(18).toFixed(1)}V${(18 - downLen).toFixed(1)}m0 0-3 3m3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  if (up) out += `<path d="M${upX.toFixed(1)} ${(18 - upLen - 2).toFixed(1)}v${upLen.toFixed(1)}m0 0-3-3m3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
   return out;
 }
 
@@ -304,7 +321,12 @@ function gateFamily(hash, n) {
   let out = "";
   for (let i = 0; i < n; i++) {
     const x = 2 + step * i;
-    out += `<path d="M${x.toFixed(1)} 4v16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+    // Real per-bar variation from hash, not just a fixed picket-fence -
+    // heights and vertical position both differ per bar/per effect, so
+    // two effects with the same bar count don't render identically.
+    const h = 12 + seedFrac(hash, 150 + i) * 6;
+    const yTop = 3 + seedFrac(hash, 160 + i) * 3;
+    out += `<path d="M${x.toFixed(1)} ${yTop.toFixed(1)}v${h.toFixed(1)}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
   }
   return out;
 }
@@ -394,9 +416,11 @@ function buildIconInner(category, subtype, hash, info) {
 
     case "chorus": return oscFamily(hash, n, 3.5, 2);
     case "phaser": {
-      const rInner = 3.5 + seedFrac(hash, 5) * 1.5;
-      return `<circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>` +
-             `<circle cx="12" cy="12" r="${rInner.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+      const rOuter = 6 + seedFrac(hash, 4) * 2.5;
+      const rInner = 2.5 + seedFrac(hash, 5) * 3;
+      const cx = 12 + (seedFrac(hash, 6) - 0.5) * 3;
+      return `<circle cx="12" cy="12" r="${rOuter.toFixed(2)}" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>` +
+             `<circle cx="${cx.toFixed(2)}" cy="12" r="${rInner.toFixed(2)}" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
     }
     case "flanger": return oscFamily(hash, n, 4.5, 1) +
       `<path d="M17 6l3 1-1 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -409,31 +433,41 @@ function buildIconInner(category, subtype, hash, info) {
       }
       return out;
     }
-    case "vibrato": return `<path d="M9 2c4 2 4 4 0 6s-4 4 0 6 4 4 0 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+    case "vibrato": {
+      const amp = 3 + seedFrac(hash, 121) * 3;
+      const cx = 7 + seedFrac(hash, 122) * 4;
+      return `<path d="M${cx.toFixed(1)} 2c${amp.toFixed(1)} 2 ${amp.toFixed(1)} 4 0 6s-${amp.toFixed(1)} 4 0 6 ${amp.toFixed(1)} 4 0 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+    }
     case "tremolo": return gateFamily(hash, clamp(n, 3, 5));
     case "modulation": return oscFamily(hash, n, 3.5, 1);
 
     case "tape-echo": return circleCascade(hash, Math.min(n, 3), false) + `<path d="M11 12h2" stroke="currentColor" stroke-width="1.5"/>`;
-    case "analog-delay": return circleCascade(hash, n, true);
+    case "analog-delay": return circleCascade(hash, n, true) +
+      `<path d="M2 17c4-3 4 3 8 0s4 3 8 0" fill="none" stroke="currentColor" stroke-width="1" opacity="0.35"/>`; // warm underlay, distinguishes from plain digital delay
     case "delay": return circleCascade(hash, n, true);
 
     case "spring-reverb": return jaggedFamily(hash, clamp(n, 5, 8));
     case "plate-reverb": return sliderFamily(hash, Math.min(n, 3));
-    case "hall-reverb": return `<path d="M4 20V10a8 6 0 0 1 16 0v10" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+    case "hall-reverb": {
+      const rx8 = 6 + seedFrac(hash, 123) * 3;
+      const ry6 = 4 + seedFrac(hash, 124) * 3;
+      const h10 = 8 + seedFrac(hash, 125) * 4;
+      return `<path d="M4 20V${(20 - h10).toFixed(1)}a${rx8.toFixed(1)} ${ry6.toFixed(1)} 0 0 1 16 0v${h10.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.5"/>`;
+    }
     case "reverb": return reverbArcs(hash, n);
 
     case "ring-mod": return arrowFamily(hash, false, false, true);
     case "octave": return arrowFamily(hash, true, true, false);
-    case "pitch": return arrowFamily(hash, true, hasParam(info, /down|low/i) || true, false);
+    case "pitch": return arrowFamily(hash, true, true, false);
 
-    case "cabinet": return ampFamily(hash, clamp(n - 2, 1, 4), true, chooseAmpFormat(hash, true));
+    case "cabinet": return ampFamily(hash, clamp(n - 2, 1, 4), true, chooseAmpFormat(hash, true), info);
     case "preamp": return boxFamily(hash);
     case "amp": {
       const hasCabinet = hasParam(info, /cabinet|cab\b/i);
       const speakers = hasCabinet ? clamp(n - 3, 2, 4) : clamp(Math.ceil(n / 3), 1, 3);
       const wide = hasCabinet || n >= 8;
       const format = chooseAmpFormat(hash, hasCabinet);
-      return ampFamily(hash, speakers, wide, format);
+      return ampFamily(hash, speakers, wide, format, info);
     }
 
     case "synth": return squareWaveFamily(hash, n);
@@ -471,7 +505,7 @@ export function iconSvgFor(modelNumberByte, id, info) {
   const key = (id >>> 0).toString(16).padStart(8, "0");
   const override = EFFECT_ICON_OVERRIDES[key];
   if (override) {
-    return `<svg viewBox="0 0 24 24" width="30" height="30">${override}</svg>`;
+    return `<svg viewBox="0 0 24 24" width="58" height="58">${override}</svg>`;
   }
 
   const name = info?.name || "";
@@ -479,10 +513,12 @@ export function iconSvgFor(modelNumberByte, id, info) {
   const subtype = subtypeFor(category, name);
   const hash = hashString(name || String(id));
   const inner = buildIconInner(category, subtype, hash, info);
-  // Modest per-effect rotation (not purely decorative - it's a cheap,
-  // broad-range differentiator that catches cases where two effects'
-  // structural parameters happen to coincide, e.g. same param count and
-  // same detected flags, which does happen across a 100+ effect list).
-  const rotation = (seedFrac(hash, 999) - 0.5) * 26; // -13..+13 degrees
-  return `<svg viewBox="0 0 24 24" width="30" height="30"><g transform="rotate(${rotation.toFixed(1)} 12 12)">${inner}</g></svg>`;
+  // No blanket rotation here on purpose - an earlier version rotated
+  // every icon by a hash-seeded angle as a cheap anti-collision trick,
+  // but it just made shapes look crooked without reliably fixing the
+  // underlying sameness (checked by actually rendering and looking -
+  // see the conversation this was fixed in). Distinctness now comes
+  // from real structural variation (shape family, format, per-parameter
+  // data) instead of cosmetic tilt.
+  return `<svg viewBox="0 0 24 24" width="58" height="58">${inner}</svg>`;
 }
