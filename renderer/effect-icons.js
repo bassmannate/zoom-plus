@@ -343,6 +343,104 @@ function pipesFamily(hash, n) {
   return out;
 }
 
+// --- dynamics subtypes: multiband / optical / swell -----------------------
+
+function miniWaveAt(hash, salt, n, amp, cy) {
+  n = clamp(n, 2, 4);
+  const step = 18 / n;
+  let d = `M3 ${cy}`;
+  for (let i = 0; i < n; i++) {
+    const cx = 3 + step * (i + 0.5);
+    const dir = i % 2 === 0 ? -1 : 1;
+    const localAmp = amp * (0.7 + seedFrac(hash, salt + i) * 0.6);
+    d += ` Q${cx.toFixed(1)} ${(cy + dir * localAmp).toFixed(1)} ${(3 + step * (i + 1)).toFixed(1)} ${cy}`;
+  }
+  return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>`;
+}
+
+function multibandFamily(hash) {
+  // two independently-compressed bands, stacked - reflects that these
+  // effects genuinely split the signal (real LoComp/HiComp-style params)
+  const ampTop = 2 + seedFrac(hash, 171) * 1.4;
+  const ampBot = 2 + seedFrac(hash, 172) * 1.4;
+  return `<path d="M2 12h20" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.45"/>` +
+    miniWaveAt(hash, 180, 3, ampTop, 7) + miniWaveAt(hash, 190, 3, ampBot, 17);
+}
+
+function opticalFamily(hash) {
+  // soft glow rather than a hard-edged shape, for the smoother
+  // response optical/photocell compressors are known for
+  const r1 = 6.5 + seedFrac(hash, 220) * 1.8;
+  const r2 = r1 - 2.4;
+  const r3 = 1.5 + seedFrac(hash, 221) * 1;
+  return `<circle cx="12" cy="12" r="${r1.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"/>` +
+         `<circle cx="12" cy="12" r="${r2.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.3" opacity="0.65"/>` +
+         `<circle cx="12" cy="12" r="${r3.toFixed(1)}" fill="currentColor"/>`;
+}
+
+function swellFamily(hash) {
+  // gradual rise to a plateau, not a symmetric squeeze - matches what a
+  // slow-attack/volume-swell effect actually does to a signal
+  const riseX = 9 + seedFrac(hash, 230) * 4;
+  const h = 11 + seedFrac(hash, 231) * 5;
+  return `<path d="M2 19Q${(riseX * 0.6).toFixed(1)} 19 ${riseX.toFixed(1)} ${(19 - h).toFixed(1)}T22 ${(19 - h).toFixed(1)}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`;
+}
+
+// --- filter subtypes: comb / step / envelope / splitter / exciter / parametric-eq
+
+function combFamily(hash, n) {
+  n = clamp(n, 5, 9);
+  const step = 20 / (n - 1 || 1);
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const x = 2 + step * i;
+    const h = 4 + ((n - i) / n) * 12 * (0.7 + seedFrac(hash, 240 + i) * 0.5);
+    out += `<path d="M${x.toFixed(1)} 20V${(20 - h).toFixed(1)}" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>`;
+  }
+  return out;
+}
+
+function stepFilterFamily(hash, n) {
+  n = clamp(n, 4, 7);
+  const step = 20 / n;
+  let d = `M2 18`;
+  for (let i = 0; i < n; i++) {
+    const y = 5 + seedFrac(hash, 250 + i) * 12;
+    const x1 = 2 + step * (i + 1);
+    d += ` V${y.toFixed(1)} H${x1.toFixed(1)}`;
+  }
+  return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+}
+
+function envelopeFamily(hash) {
+  const peakX = 7 + seedFrac(hash, 260) * 5;
+  const peakY = 4 + seedFrac(hash, 261) * 4;
+  return `<path d="M2 19L${peakX.toFixed(1)} ${peakY.toFixed(1)}L22 19" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+}
+
+function splitterFamily(hash) {
+  const forkX = 9 + seedFrac(hash, 270) * 4;
+  const spread = 4.5 + seedFrac(hash, 271) * 3;
+  return `<path d="M2 12H${forkX.toFixed(1)}M${forkX.toFixed(1)} 12L22 ${(12 - spread).toFixed(1)}M${forkX.toFixed(1)} 12L22 ${(12 + spread).toFixed(1)}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/>`;
+}
+
+function exciterFamily(hash, n) {
+  const wave = waveFamily(hash, Math.max(n, 3), 4, "normal");
+  const sparkX = 17 + seedFrac(hash, 280) * 3, sparkY = 5 + seedFrac(hash, 281) * 3;
+  const spark = `<path d="M${sparkX.toFixed(1)} ${(sparkY - 2).toFixed(1)}v4M${(sparkX - 2).toFixed(1)} ${sparkY.toFixed(1)}h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>`;
+  return wave + spark;
+}
+
+function parametricEqFamily(hash) {
+  // a single adjustable bell/peak, in contrast to the multi-slider graphic
+  // EQ icon - matches what a parametric EQ actually gives you (one band)
+  const peakX = 8 + seedFrac(hash, 290) * 7;
+  const width = 4.5 + seedFrac(hash, 291) * 3;
+  const height = 5.5 + seedFrac(hash, 292) * 4.5;
+  const d = `M2 16C${(peakX - width).toFixed(1)} 16 ${(peakX - width * 0.5).toFixed(1)} ${(16 - height).toFixed(1)} ${peakX.toFixed(1)} ${(16 - height).toFixed(1)}S${(peakX + width).toFixed(1)} 16 22 16`;
+  return `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="${peakX.toFixed(1)}" cy="${(16 - height).toFixed(1)}" r="1.4" fill="currentColor"/>`;
+}
+
 // --- category/subtype classification (unchanged logic from before) -------
 
 const PREFIX_CATEGORY = {
@@ -359,9 +457,24 @@ const PREFIX_CATEGORY = {
 };
 
 const SUBTYPE_RULES = {
-  dynamics: [[/limit/i, "limiter"], [/gate|noise|\bnr\b/i, "gate"]],
+  dynamics: [
+    [/limit|lmt/i, "limiter"],
+    [/gate|noise|znr/i, "gate"],
+    [/dual|multi|\bmb\b/i, "multiband"],
+    [/opt/i, "optical"],
+    [/slow/i, "swell"],
+  ],
   drive: [[/fuzz/i, "fuzz"], [/dist/i, "distortion"], [/boost/i, "boost"]],
-  filter: [[/wah/i, "wah"], [/\beq\b|geq|peq/i, "eq"]],
+  filter: [
+    [/wah/i, "wah"],
+    [/geq/i, "eq"],
+    [/comb/i, "comb"],
+    [/seq|step|rndm|random|lfo/i, "step-filter"],
+    [/cry|tron|envfilter/i, "envelope"],
+    [/splitter/i, "splitter"],
+    [/exciter|bottom/i, "exciter"],
+    [/peq|parae|\blow eq\b|\bhigh eq\b/i, "parametric-eq"],
+  ],
   modulation: [
     [/cho/i, "chorus"], [/phase/i, "phaser"], [/flang/i, "flanger"],
     [/rotary|leslie/i, "rotary"], [/vibe|vibrato/i, "vibrato"], [/trem/i, "tremolo"],
@@ -403,6 +516,9 @@ function buildIconInner(category, subtype, hash, info) {
   switch (subtype) {
     case "limiter": return waveFamily(hash, n, 4.5, "ceiling");
     case "gate": return gateFamily(hash, n);
+    case "multiband": return multibandFamily(hash);
+    case "optical": return opticalFamily(hash);
+    case "swell": return swellFamily(hash);
     case "dynamics": return waveFamily(hash, n, 5, "normal");
 
     case "fuzz": return jaggedFamily(hash, n);
@@ -412,6 +528,12 @@ function buildIconInner(category, subtype, hash, info) {
 
     case "wah": return pedalFamily(hash);
     case "eq": return sliderFamily(hash, n);
+    case "parametric-eq": return parametricEqFamily(hash);
+    case "comb": return combFamily(hash, n);
+    case "step-filter": return stepFilterFamily(hash, n);
+    case "envelope": return envelopeFamily(hash);
+    case "splitter": return splitterFamily(hash);
+    case "exciter": return exciterFamily(hash, n);
     case "filter": return waveFamily(hash, n, 6, "normal");
 
     case "chorus": return oscFamily(hash, n, 3.5, 2);
