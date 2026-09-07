@@ -32,7 +32,24 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
-  Menu.setApplicationMenu(null);
+
+  // A totally empty menu (the previous version of this file just called
+  // Menu.setApplicationMenu(null)) also silently removes the keyboard
+  // shortcut for DevTools, since that shortcut normally comes attached to
+  // a menu item - it's not a global Electron default. That left no way
+  // to open DevTools at all (no menu, no right-click context menu either,
+  // since we never registered one of those). This minimal menu keeps the
+  // clean look but keeps Ctrl+Shift+I / Cmd+Option+I working.
+  const menu = Menu.buildFromTemplate([
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "toggleDevTools" },
+      ],
+    },
+  ]);
+  Menu.setApplicationMenu(menu);
 }
 
 app.whenReady().then(createWindow);

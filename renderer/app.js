@@ -28,6 +28,7 @@ let device = null;
 let effectMap = {};
 let currentModelByte = null;
 let selectedSlot = null;
+let selectedMemorySlot = null;
 
 const el = (id) => document.getElementById(id);
 const els = {
@@ -38,6 +39,7 @@ const els = {
   patchTempo: el("patch-tempo"),
   btnConnect: el("btn-connect"),
   btnSync: el("btn-sync"),
+  btnRestore: el("btn-restore"),
   btnBackup: el("btn-backup"),
   btnSave: el("btn-save"),
   btnLoad: el("btn-load"),
@@ -65,6 +67,10 @@ function status(msg, isError = false) {
   if (isError) console.error(msg);
 }
 
+function updateRestoreButtonState() {
+  els.btnRestore.disabled = !device || !device.isOpen || selectedMemorySlot === null;
+}
+
 function setConnected(open, name) {
   els.connLed.className = "led " + (open ? "led-on" : "led-off");
   els.connLabel.textContent = open ? name : "Not connected";
@@ -76,7 +82,9 @@ function setConnected(open, name) {
     els.patchNumber.textContent = "--";
     els.patchName.value = "";
     els.patchTempo.textContent = "--";
+    selectedMemorySlot = null;
   }
+  updateRestoreButtonState();
 }
 
 async function loadEffectMapFor(modelNumber) {
@@ -183,6 +191,9 @@ function renderPatchList(patches) {
   els.patchList.innerHTML = "";
   patches.forEach((patch, i) => {
     const li = document.createElement("li");
+    if (selectedMemorySlot === i) {
+      li.classList.add("active");
+    }
     li.innerHTML = `<span class="p-num">${String(i).padStart(2, "0")}</span>` +
       `<span class="p-name">${escapeHtml(patch?.name || "(empty)")}</span>`;
     li.addEventListener("click", () => selectPatchFromList(i, li));
@@ -191,6 +202,8 @@ function renderPatchList(patches) {
 }
 
 async function selectPatchFromList(index, li) {
+  selectedMemorySlot = index;
+  updateRestoreButtonState();
   status(`Loading patch ${index}…`);
   try {
     const loaded = await device.downloadPatchFromMemorySlot(index);
@@ -422,10 +435,44 @@ async function backupAll() {
   }
 }
 
+async function restoreToSlot() {
+  if (!device || selectedMemorySlot === null) return;
+  const result = await window.fileAPI.openFile({
+    binary: true,
+    filters: [{ name: "Zoom Patch", extensions: ["zpatch"] }],
+  });
+  if (result.canceled) return;
+
+  status(`Restoring patch to slot ${String(selectedMemorySlot).padStart(2, "0")}…`);
+  try {
+    const { ZoomPatch } = await import("./lib/ZoomPatch.js");
+    const patch = ZoomPatch.fromPatchData(result.data);
+    if (!patch) {
+      status("Could not parse patch file.", true);
+      return;
+    }
+    const success = await device.uploadPatchToMemorySlot(patch, selectedMemorySlot);
+    if (success) {
+      device.uploadPatchToCurrentPatch(patch);
+      const item = els.patchList.children[selectedMemorySlot];
+      if (item) {
+        const nameEl = item.querySelector(".p-name");
+        if (nameEl) nameEl.textContent = patch.name || "(empty)";
+      }
+      status(`Restored patch to slot ${String(selectedMemorySlot).padStart(2, "0")}.`);
+    } else {
+      status(`Failed to restore patch to slot ${String(selectedMemorySlot).padStart(2, "0")}.`, true);
+    }
+  } catch (e) {
+    status("Could not restore patch: " + e.message, true);
+  }
+}
+
 // --- Wire up buttons ---------------------------------------------------
 
 els.btnConnect.addEventListener("click", connect);
 els.btnSync.addEventListener("click", syncToPedal);
+els.btnRestore.addEventListener("click", restoreToSlot);
 els.btnSave.addEventListener("click", savePatch);
 els.btnLoad.addEventListener("click", loadPatch);
 els.btnBackup.addEventListener("click", backupAll);
