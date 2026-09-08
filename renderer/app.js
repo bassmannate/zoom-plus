@@ -245,10 +245,35 @@ function renderChain(patch) {
     mod.dataset.slot = String(i);
     mod.innerHTML =
       `<div class="module-body">${iconSvgFor(currentModelByte, eff.id, info)}<div class="module-led"></div></div>` +
-      `<div class="module-label">${escapeHtml(label)}</div>`;
+      `<div class="module-label">${escapeHtml(label)}</div>` +
+      `<div class="module-controls">` +
+        `<button class="move-up" title="Move up" ${i === 0 ? "disabled" : ""}>▲</button>` +
+        `<button class="move-down" title="Move down" ${i === settings.length - 1 ? "disabled" : ""}>▼</button>` +
+      `</div>`;
     mod.addEventListener("click", () => selectEffect(patch, i));
+    mod.querySelector(".move-up").addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveEffect(patch, i, i - 1);
+    });
+    mod.querySelector(".move-down").addEventListener("click", (e) => {
+      e.stopPropagation();
+      moveEffect(patch, i, i + 1);
+    });
     els.chain.appendChild(mod);
   });
+}
+
+function moveEffect(patch, fromSlot, toSlot) {
+  if (!patch?.effectSettings) return;
+  if (toSlot < 0 || toSlot >= patch.effectSettings.length) return;
+  patch.swapEffectsInSlots(fromSlot, toSlot);
+  renderChain(patch);
+  // Update selection to follow the moved effect
+  if (selectedSlot === fromSlot) {
+    selectEffect(patch, toSlot);
+  } else if (selectedSlot === toSlot) {
+    selectEffect(patch, fromSlot);
+  }
 }
 
 function selectEffect(patch, slot) {

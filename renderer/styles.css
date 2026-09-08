@@ -298,6 +298,47 @@ input { font-family: inherit; color: inherit; }
 }
 .module.selected .module-label { color: var(--text-primary); }
 
+.module-controls {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.module:hover .module-controls {
+  opacity: 1;
+}
+
+.module-controls button {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 6px;
+  line-height: 1;
+  border-radius: 2px;
+  transition: color 0.15s;
+}
+
+.module-controls button:hover:not(:disabled) {
+  color: var(--accent-brass);
+}
+
+.module-controls button:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+/* On touch devices, always show the controls since hover isn't available */
+@media (hover: none) {
+  .module-controls {
+    opacity: 1;
+  }
+}
+
 /* the wire between modules */
 .wire {
   height: 1px;
