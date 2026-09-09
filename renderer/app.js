@@ -679,7 +679,10 @@ async function syncToPedal() {
 }
 
 function patchToBytes(patch) {
-  return patch.PTCF !== null ? patch.buildPTCFChunk(device.ptcfNameLength) : patch.buildMSDataBuffer();
+  // Clone the patch if it's frozen (e.g., from device.patchList) to avoid
+  // "Cannot assign to read only property" errors in buildPTCFChunk/buildMSDataBuffer
+  const p = Object.isFrozen(patch) ? patch.clone() : patch;
+  return p.PTCF !== null ? p.buildPTCFChunk(device.ptcfNameLength) : p.buildMSDataBuffer();
 }
 
 async function savePatch() {
