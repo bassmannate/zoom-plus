@@ -395,7 +395,8 @@ input { font-family: inherit; color: inherit; }
 }
 
 .module.drag-over {
-  /* Visual indicator for drop target */
+  outline: 2px dashed var(--accent-brass-dim);
+  outline-offset: 2px;
 }
 
 .wire.drag-over {
