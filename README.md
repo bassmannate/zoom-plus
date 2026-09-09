@@ -42,13 +42,13 @@ sym.bios.is in a browser).
   binary patch format via `ZoomPatch.buildPTCFChunk()` /
   `fromPatchData()` - not a lossy reinterpretation)
 - ✅ Backup every patch on the pedal to a folder of `.zpatch` files
+- ✅ Restore a single patch back into a specific memory slot (vs. just
+  the edit buffer via Sync)
 - ⚠️ MS-70CDR+ effect names/parameter ranges aren't wired in yet - only
   MS-50G+ (model `0x23`) and MS-60B+ (model `0x27`) are mapped in
   `app.js`'s `MODEL_TO_MAPPING_FILE`. The effect mapping JSON for
   MS-70CDR+ is already bundled in `renderer/data/` though - it just
   needs that pedal's model number confirmed and added.
-- ❌ Restore a single patch back into a specific memory slot (vs. just
-  the edit buffer via Sync) - not implemented
 - ❌ Patch renaming isn't sent to the pedal live yet (real hardware sends
   name edits character-by-character; this app currently only updates
   the name locally until you hit Sync)
