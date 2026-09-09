@@ -63,6 +63,11 @@ sym.bios.is in a browser).
   Google Fonts; falls back to system fonts if offline, but for a fully
   offline-capable app the font files should be bundled locally
 
+## To Do
+- Verify functionality with other devices. I only have the MS-60B+ to test
+  with so other pedals such as the MS-50G+ are all theoretical.
+- More identifiable effect icons. Just about all of them are completely generic.
+
 ## Packaging as a real installable app
 
 `npm run dist` (via `electron-builder`, already in `devDependencies`)
