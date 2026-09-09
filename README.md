@@ -52,10 +52,13 @@ sym.bios.is in a browser).
 - ❌ Patch renaming isn't sent to the pedal live yet (real hardware sends
   name edits character-by-character; this app currently only updates
   the name locally until you hit Sync)
-- ✅ Re-order effects within a patch (move up/down) - ▲/▼ buttons on each
-  module in the signal chain
-- ❌ Insert / delete effects in the chain - `ZoomDevice` and `ZoomPatch`
-  support this (see zoom-explorer's source), just not wired into this UI yet
+- ✅ Re-order effects within a patch - drag and drop modules within the
+  signal chain to reorder them
+- ✅ Add effects from a drag-and-drop library - effect library panel shows
+  all effects available on the connected pedal, organized by category;
+  drag effects into the chain up to the pedal's maximum (typically 6)
+- ✅ Remove effects from the chain - click the × button on each module
+  to remove it
 - ❌ Offline font loading - `index.html` currently pulls IBM Plex from
   Google Fonts; falls back to system fonts if offline, but for a fully
   offline-capable app the font files should be bundled locally

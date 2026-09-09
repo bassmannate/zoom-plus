@@ -1,4 +1,4 @@
-import { iconSvgFor } from "./effect-icons.js";
+import { iconSvgFor, categorize } from "./effect-icons.js";
 import { MIDIProxyForWebMIDIAPI } from "./lib/MIDIProxyForWebMIDIAPI.js";
 import { getMIDIDeviceList } from "./lib/miditools.js";
 import { ZoomDevice } from "./lib/ZoomDevice.js";
@@ -53,6 +53,8 @@ const els = {
   detailKnobs: el("detail-knobs"),
   statusText: el("status-text"),
   crcIndicator: el("crc-indicator"),
+  library: el("library"),
+  libraryContent: el("library-content"),
 };
 
 function escapeHtml(s) {
@@ -78,11 +80,13 @@ function setConnected(open, name) {
   els.btnConnect.textContent = open ? "Reconnect" : "Connect";
   els.chainEmpty.classList.toggle("hidden", open);
   els.chainWrap.classList.toggle("hidden", !open);
+  els.library.classList.toggle("hidden", !open);
   if (!open) {
     els.patchNumber.textContent = "--";
     els.patchName.value = "";
     els.patchTempo.textContent = "--";
     selectedMemorySlot = null;
+    els.libraryContent.innerHTML = "";
   }
   updateRestoreButtonState();
 }
@@ -153,6 +157,7 @@ async function connect() {
   device.parameterEditEnable();
 
   await loadEffectMapFor(desc.modelNumber);
+  populateLibrary();
   setConnected(true, device.deviceName || desc.deviceName);
   status("Connected.");
 
@@ -241,32 +246,94 @@ function renderChain(patch) {
     const info = effectInfo(eff.id);
     const label = info?.screenName || info?.name || "Effect " + eff.id.toString(16);
     const mod = document.createElement("div");
-    mod.className = "module" + (eff.enabled ? " enabled" : "");
+    mod.className = "module draggable" + (eff.enabled ? " enabled" : "");
     mod.dataset.slot = String(i);
+    mod.draggable = true;
     mod.innerHTML =
       `<div class="module-body">${iconSvgFor(currentModelByte, eff.id, info)}<div class="module-led"></div></div>` +
       `<div class="module-label">${escapeHtml(label)}</div>` +
-      `<div class="module-controls">` +
-        `<button class="move-up" title="Move up" ${i === 0 ? "disabled" : ""}>▲</button>` +
-        `<button class="move-down" title="Move down" ${i === settings.length - 1 ? "disabled" : ""}>▼</button>` +
-      `</div>`;
+      `<button class="module-delete" title="Remove effect">×</button>`;
     mod.addEventListener("click", () => selectEffect(patch, i));
-    mod.querySelector(".move-up").addEventListener("click", (e) => {
+
+    // Delete button
+    mod.querySelector(".module-delete").addEventListener("click", (e) => {
       e.stopPropagation();
-      moveEffect(patch, i, i - 1);
+      deleteEffect(patch, i);
     });
-    mod.querySelector(".move-down").addEventListener("click", (e) => {
-      e.stopPropagation();
-      moveEffect(patch, i, i + 1);
+
+    // Drag and drop for reordering within the chain
+    mod.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("application/x-chain-slot", String(i));
+      e.dataTransfer.effectAllowed = "move";
+      mod.classList.add("dragging");
     });
+
+    mod.addEventListener("dragend", () => {
+      mod.classList.remove("dragging");
+      hideChainDropHighlights();
+    });
+
+    mod.addEventListener("dragover", (e) => {
+      if (!e.dataTransfer.types.includes("application/x-chain-slot")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      mod.classList.add("drag-over");
+    });
+
+    mod.addEventListener("dragleave", () => {
+      mod.classList.remove("drag-over");
+    });
+
+    mod.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const fromSlot = parseInt(e.dataTransfer.getData("application/x-chain-slot"), 10);
+      const toSlot = parseInt(mod.dataset.slot, 10);
+      if (!isNaN(fromSlot) && !isNaN(toSlot) && fromSlot !== toSlot) {
+        reorderEffect(patch, fromSlot, toSlot);
+      }
+      mod.classList.remove("drag-over");
+    });
+
     els.chain.appendChild(mod);
   });
+
+  updateLibraryState();
 }
 
-function moveEffect(patch, fromSlot, toSlot) {
+function deleteEffect(patch, slot) {
+  if (!patch?.effectSettings) return;
+  const info = effectInfo(patch.effectSettings[slot].id);
+  patch.deleteEffectInSlot(slot);
+  renderChain(patch);
+  status(`Removed ${info?.name || "effect"} from chain.`);
+}
+
+function reorderEffect(patch, fromSlot, toSlot) {
   if (!patch?.effectSettings) return;
   if (toSlot < 0 || toSlot >= patch.effectSettings.length) return;
-  patch.swapEffectsInSlots(fromSlot, toSlot);
+  if (fromSlot === toSlot) return;
+
+  // Move effect by slicing it out and inserting at the new position
+  const effect = patch.effectSettings[fromSlot];
+  patch.effectSettings.splice(fromSlot, 1);
+  patch.effectSettings.splice(toSlot, 0, effect);
+
+  // Update IDs array to match
+  if (patch.ids !== null) {
+    const id = patch.ids[fromSlot];
+    // Shift IDs
+    if (fromSlot < toSlot) {
+      for (let i = fromSlot; i < toSlot; i++) {
+        patch.ids[i] = patch.ids[i + 1];
+      }
+    } else {
+      for (let i = fromSlot; i > toSlot; i--) {
+        patch.ids[i] = patch.ids[i - 1];
+      }
+    }
+    patch.ids[toSlot] = id;
+  }
+
   renderChain(patch);
   // Update selection to follow the moved effect
   if (selectedSlot === fromSlot) {
@@ -274,6 +341,221 @@ function moveEffect(patch, fromSlot, toSlot) {
   } else if (selectedSlot === toSlot) {
     selectEffect(patch, fromSlot);
   }
+}
+
+function hideChainDropHighlights() {
+  els.chain.querySelectorAll(".module.drag-over").forEach(m => m.classList.remove("drag-over"));
+  els.chain.querySelectorAll(".wire.drag-over").forEach(w => w.classList.remove("drag-over"));
+}
+
+// --- Effect Library -------------------------------------------------------
+
+const CATEGORY_ORDER = [
+  "dynamics", "filter", "drive", "amp", "modulation",
+  "pitch", "synth", "sfx", "delay", "reverb", "fx",
+];
+
+const CATEGORY_LABELS = {
+  dynamics: "Dynamics",
+  filter: "Filter",
+  drive: "Drive",
+  amp: "Amp",
+  modulation: "Modulation",
+  pitch: "Pitch",
+  synth: "Synth",
+  sfx: "SFX",
+  delay: "Delay",
+  reverb: "Reverb",
+  fx: "Other",
+};
+
+function populateLibrary() {
+  els.libraryContent.innerHTML = "";
+  if (!effectMap || Object.keys(effectMap).length === 0) return;
+
+  // Group effects by category
+  const byCategory = {};
+  for (const [hexId, info] of Object.entries(effectMap)) {
+    const id = parseInt(hexId, 16);
+    const category = categorize(currentModelByte, id, info.name);
+    if (!byCategory[category]) byCategory[category] = [];
+    byCategory[category].push({ id, info });
+  }
+
+  // Sort effects within each category by name
+  for (const category of Object.keys(byCategory)) {
+    byCategory[category].sort((a, b) => a.info.name.localeCompare(b.info.name));
+  }
+
+  // Render categories in order
+  for (const category of CATEGORY_ORDER) {
+    const effects = byCategory[category];
+    if (!effects || effects.length === 0) continue;
+
+    const catEl = document.createElement("div");
+    catEl.className = "lib-category";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "lib-category-name";
+    nameEl.textContent = CATEGORY_LABELS[category] || category;
+    catEl.appendChild(nameEl);
+
+    const effectsEl = document.createElement("div");
+    effectsEl.className = "lib-category-effects";
+
+    for (const { id, info } of effects) {
+      const effEl = document.createElement("div");
+      effEl.className = "lib-effect";
+      effEl.draggable = true;
+      effEl.dataset.effectId = String(id);
+
+      const iconSvg = iconSvgFor(currentModelByte, id, info);
+      effEl.innerHTML =
+        `<div class="lib-effect-icon">${iconSvg}</div>` +
+        `<div class="lib-effect-name" title="${escapeHtml(info.name)}">${escapeHtml(info.screenName || info.name)}</div>`;
+
+      // Drag events for library items
+      effEl.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("application/x-effect-id", String(id));
+        e.dataTransfer.effectAllowed = "copy";
+        effEl.classList.add("dragging");
+      });
+
+      effEl.addEventListener("dragend", () => {
+        effEl.classList.remove("dragging");
+        hideDropIndicator();
+        updateLibraryState();
+      });
+
+      effectsEl.appendChild(effEl);
+    }
+
+    catEl.appendChild(effectsEl);
+    els.libraryContent.appendChild(catEl);
+  }
+
+  updateLibraryState();
+}
+
+function updateLibraryState() {
+  const patch = device?.currentPatch;
+  const maxEffects = patch?.maxNumEffects ?? device?.maxNumEffects ?? 6;
+  const currentCount = patch?.effectSettings?.length ?? 0;
+  els.library.classList.toggle("full", currentCount >= maxEffects);
+}
+
+function setupChainDropZone() {
+  // Make the chain a drop zone for new effects from the library
+  els.chain.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer.types.includes("application/x-effect-id")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    showDropIndicator(e);
+  });
+
+  els.chain.addEventListener("dragleave", (e) => {
+    // Only hide if we're leaving the chain entirely (not entering a child)
+    if (!els.chain.contains(e.relatedTarget)) {
+      hideDropIndicator();
+    }
+  });
+
+  els.chain.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const effectId = parseInt(e.dataTransfer.getData("application/x-effect-id"), 10);
+    if (isNaN(effectId)) return;
+
+    const patch = device?.currentPatch;
+    if (!patch) return;
+
+    const maxEffects = patch.maxNumEffects;
+    if (patch.effectSettings.length >= maxEffects) {
+      status(`Maximum ${maxEffects} effects reached.`, true);
+      hideDropIndicator();
+      return;
+    }
+
+    const dropIndex = getDropIndex(e);
+    addEffectToPatch(patch, effectId, dropIndex);
+    hideDropIndicator();
+  });
+}
+
+function showDropIndicator(e) {
+  hideDropIndicator(); // clear any existing
+
+  const indicator = document.createElement("div");
+  indicator.className = "chain-drop-indicator active";
+  indicator.id = "chain-drop-indicator";
+
+  const dropIndex = getDropIndex(e);
+  const modules = [...els.chain.querySelectorAll(".module")];
+
+  if (dropIndex <= 0) {
+    els.chain.prepend(indicator);
+  } else if (dropIndex >= modules.length) {
+    els.chain.appendChild(indicator);
+  } else {
+    // Insert before the module at dropIndex
+    const targetModule = modules.find(m => Number(m.dataset.slot) === dropIndex);
+    if (targetModule) {
+      els.chain.insertBefore(indicator, targetModule);
+    } else {
+      els.chain.appendChild(indicator);
+    }
+  }
+}
+
+function hideDropIndicator() {
+  const indicator = document.getElementById("chain-drop-indicator");
+  if (indicator) indicator.remove();
+}
+
+function getDropIndex(e) {
+  // Find the position in the chain where the effect should be inserted
+  const modules = [...els.chain.querySelectorAll(".module")];
+  if (modules.length === 0) return 0;
+
+  // Get the mouse position relative to the chain
+  const mouseX = e.clientX;
+
+  // Find the module that the mouse is over
+  for (let i = 0; i < modules.length; i++) {
+    const rect = modules[i].getBoundingClientRect();
+    const midX = rect.left + rect.width / 2;
+    if (mouseX < midX) {
+      return i;
+    }
+  }
+
+  // Mouse is past all modules, insert at the end
+  return modules.length;
+}
+
+async function addEffectToPatch(patch, effectId, slot) {
+  const info = effectInfo(effectId);
+  const numParams = info?.parameters?.length ?? 0;
+
+  // Dynamically import EffectSettings from ZoomPatch
+  const { EffectSettings } = await import("./lib/ZoomPatch.js");
+
+  // Create EffectSettings with default parameter values
+  const settings = new EffectSettings(numParams);
+  settings.enabled = true;
+  settings.id = effectId;
+
+  // Set default parameter values from the effect mapping
+  if (info?.parameters) {
+    for (let i = 0; i < info.parameters.length; i++) {
+      const param = info.parameters[i];
+      settings.parameters[i] = param.default ?? 0;
+    }
+  }
+
+  patch.addEffectInSlot(slot, settings);
+  renderChain(patch);
+  updateLibraryState();
+  status(`Added ${info?.name || "effect"} to chain.`);
 }
 
 function selectEffect(patch, slot) {
@@ -501,6 +783,9 @@ els.btnRestore.addEventListener("click", restoreToSlot);
 els.btnSave.addEventListener("click", savePatch);
 els.btnLoad.addEventListener("click", loadPatch);
 els.btnBackup.addEventListener("click", backupAll);
+
+// Set up the chain as a drop zone for the effect library
+setupChainDropZone();
 
 els.patchName.addEventListener("change", () => {
   if (!device?.currentPatch) return;

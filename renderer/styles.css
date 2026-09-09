@@ -339,6 +339,66 @@ input { font-family: inherit; color: inherit; }
   }
 }
 
+/* Delete button */
+.module-delete {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  z-index: 2;
+}
+
+.module:hover .module-delete {
+  opacity: 1;
+}
+
+.module-delete:hover {
+  color: var(--accent-red);
+  background: var(--panel);
+  border-color: var(--accent-red);
+}
+
+@media (hover: none) {
+  .module-delete {
+    opacity: 1;
+  }
+}
+
+/* Drag and drop within the chain */
+.module.draggable {
+  cursor: grab;
+}
+
+.module.draggable:active {
+  cursor: grabbing;
+}
+
+.module.dragging {
+  opacity: 0.4;
+}
+
+.module.drag-over {
+  /* Visual indicator for drop target */
+}
+
+.wire.drag-over {
+  background: var(--accent-brass);
+  height: 3px;
+}
+
 /* the wire between modules */
 .wire {
   height: 1px;
@@ -346,6 +406,132 @@ input { font-family: inherit; color: inherit; }
   flex: 0 0 20px;
   align-self: center;
   margin-top: -32px; /* align with the module body's vertical center-ish */
+}
+
+/* drop zone indicator in the chain */
+.chain-drop-indicator {
+  width: 3px;
+  background: var(--accent-brass);
+  border-radius: 2px;
+  flex: 0 0 auto;
+  align-self: stretch;
+  margin: 4px 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.chain-drop-indicator.active {
+  opacity: 1;
+}
+
+/* drag-over state for modules and wires */
+.module.drag-over,
+.wire.drag-over {
+  outline: 2px dashed var(--accent-brass-dim);
+  outline-offset: -2px;
+}
+
+/* --- Effect Library ------------------------------------------------------ */
+
+#library {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 16px 20px 20px;
+  flex-shrink: 0;
+}
+
+#library-header {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+#library-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.lib-category {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lib-category-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.lib-category-effects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lib-effect {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 72px;
+  padding: 6px 4px;
+  border-radius: var(--radius);
+  cursor: grab;
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.lib-effect:hover {
+  background: var(--panel-raised);
+}
+
+.lib-effect:active {
+  cursor: grabbing;
+}
+
+.lib-effect.dragging {
+  opacity: 0.5;
+}
+
+.lib-effect-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.lib-effect-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.lib-effect-name {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#library.full .lib-effect {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#library.full .lib-effect:hover {
+  background: transparent;
 }
 
 /* --- Detail / knob panel ------------------------------------------------ */
