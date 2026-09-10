@@ -74,6 +74,12 @@ sym.bios.is in a browser).
 builds an AppImage on Linux per the `build` config in `package.json`.
 Add `mac`/`win` targets there if you need other platforms.
 
+## Screen shots
+<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/065c01fc-9e50-417a-95f1-ad5252c607db" />
+<img width="1283" height="831" alt="image" src="https://github.com/user-attachments/assets/01d56c86-d339-4e4f-a6a5-a61e30c011e5" />
+
+
+
 ## Project layout
 
 ```
