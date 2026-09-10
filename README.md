@@ -2,7 +2,7 @@
 
 A native desktop patch editor for Zoom's MS Plus multistomp pedals
 (MS-50G+, MS-60B+; MS-70CDR+ partially - see below), built as an
-alternative interface to [sym.bios.is](https://sym.bios.is), reusing its
+alternative interface to [zoom-explorer](https://github.com/thammer/zoom-explorer), reusing its
 underlying protocol/patch logic under the MIT license. See
 `THIRD_PARTY_NOTICES.md` for the attribution details.
 
