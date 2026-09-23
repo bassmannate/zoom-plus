@@ -1,27 +1,22 @@
 import { iconSvgFor, categorize } from "./effect-icons.js";
 import { MIDIProxyForWebMIDIAPI } from "./lib/MIDIProxyForWebMIDIAPI.js";
 import { getMIDIDeviceList } from "./lib/miditools.js";
-import { ZoomDevice } from "./lib/ZoomDevice.js";
+import { findProfileFor, loadProfileData } from "./devices/profiles.js";
+import {
+  buildActionUnit,
+  buildKnobUnit,
+  buildSelectUnit,
+  buildToggleUnit,
+  setKnobVisual,
+  wireKnobDrag,
+} from "./ui/controls.js";
 
-// Model number (from the identity reply) -> effect mapping file. Only the
-// two models actually confirmed against real hardware are listed - see
-// THIRD_PARTY_NOTICES.md and the zoomplus/ project's README for how these
-// were found.
-//
-// MS-70CDR+'s mapping file is already bundled (renderer/data/) and its
-// effect-icon category table is already built (effect-icons.js) - both
-// verified against the real data (150/150 effects categorized cleanly).
-// The only missing piece is its model number byte, which can only come
-// from running `identify` against real hardware (it's a protocol detail,
-// not something in Zoom's published manuals). Once known, add it both
-// here and in effect-icons.js's PREFIX_CATEGORY - that's the entire fix.
-const MODEL_TO_MAPPING_FILE = {
-  0x23: "data/zoom-effect-mappings-ms50gp.json",
-  0x27: "data/zoom-effect-mappings-ms60bp.json",
-  // 0x??: "data/zoom-effect-mappings-ms70cdrp.json", // MS-70CDR+ - see above
-};
-
-const ZOOM_MANUFACTURER_ID = 0x52;
+// Which device we're talking to is decided entirely by devices/profiles.js:
+// it knows the identity signatures, which view layout each device wants
+// ("chain" for the Zoom pedals, "fixed-panel" for the Bass POD Pro) and how to
+// build the right adapter for it. This file only orchestrates the UI.
+let profile = null;
+let profileData = null;
 
 let midi = null;
 let device = null;
@@ -29,6 +24,7 @@ let effectMap = {};
 let currentModelByte = null;
 let selectedSlot = null;
 let selectedMemorySlot = null;
+const panelControls = new Map(); // ccNumber -> control handle from ui/controls.js
 
 const el = (id) => document.getElementById(id);
 const els = {
@@ -37,6 +33,7 @@ const els = {
   patchNumber: el("patch-number"),
   patchName: el("patch-name"),
   patchTempo: el("patch-tempo"),
+  patchTempoWrap: el("patch-tempo-wrap"),
   btnConnect: el("btn-connect"),
   btnSync: el("btn-sync"),
   btnRestore: el("btn-restore"),
@@ -55,6 +52,11 @@ const els = {
   crcIndicator: el("crc-indicator"),
   library: el("library"),
   libraryContent: el("library-content"),
+  panelWrap: el("panel-wrap"),
+  panelModel: el("panel-model"),
+  panelProgram: el("panel-program"),
+  panelNote: el("panel-note"),
+  panelGroups: el("panel-groups"),
 };
 
 function escapeHtml(s) {
@@ -74,28 +76,66 @@ function updateRestoreButtonState() {
 }
 
 function setConnected(open, name) {
+  const isChain = profile?.layout === "chain";
+  const isPanel = profile?.layout === "fixed-panel";
+
   els.connLed.className = "led " + (open ? "led-on" : "led-off");
   els.connLabel.textContent = open ? name : "Not connected";
-  for (const b of [els.btnSync, els.btnBackup, els.btnSave, els.btnLoad]) b.disabled = !open;
   els.btnConnect.textContent = open ? "Reconnect" : "Connect";
+
+  // Sync works for both layouts: on the Zoom side it uploads the patch blob,
+  // on the POD side it replays every panel parameter as a control change.
+  els.btnSync.disabled = !open;
+  els.btnSync.title = isPanel
+    ? "Send every parameter on this panel to the POD as a control change"
+    : els.btnSync.dataset.chainTitle;
+
+  // Backing up, saving, loading and restoring all move whole patch blobs, so
+  // they stay Zoom-only until the POD's sys-ex program dump is implemented.
+  for (const b of [els.btnBackup, els.btnSave, els.btnLoad, els.btnRestore]) {
+    b.disabled = !open || !isChain;
+    b.title = isChain ? b.dataset.chainTitle : POD_SYSEX_PENDING_TITLE;
+  }
+
   els.chainEmpty.classList.toggle("hidden", open);
-  els.chainWrap.classList.toggle("hidden", !open);
-  els.library.classList.toggle("hidden", !open);
+  els.chainWrap.classList.toggle("hidden", !(open && isChain));
+  els.panelWrap.classList.toggle("hidden", !(open && isPanel));
+  els.library.classList.toggle("hidden", !(open && isChain));
+
+  // The patch name and tempo fields belong to the Zoom patch model. The POD
+  // has neither (its program names live in the sys-ex dump), so hide them
+  // rather than show empty fields pretending to be something.
+  els.patchName.classList.toggle("hidden", !isChain);
+  els.patchTempoWrap.classList.toggle("hidden", !isChain);
+
+  if (panelControls.size > 0 && !open) resetPanel();
+
   if (!open) {
     els.patchNumber.textContent = "--";
     els.patchName.value = "";
     els.patchTempo.textContent = "--";
     selectedMemorySlot = null;
     els.libraryContent.innerHTML = "";
+    els.crcIndicator.textContent = "";
   }
   updateRestoreButtonState();
 }
 
-async function loadEffectMapFor(modelNumber) {
+const POD_SYSEX_PENDING_TITLE =
+  "Not available for the Bass POD Pro yet - it needs the sys-ex program dump, which is the next piece of work";
+
+function setTransportAvailability() {
+  // Remember the titles the markup came with, so switching between devices
+  // restores them instead of leaving the POD's placeholder text behind.
+  for (const b of [els.btnSync, els.btnBackup, els.btnSave, els.btnLoad, els.btnRestore]) {
+    if (b.dataset.chainTitle === undefined) b.dataset.chainTitle = b.title;
+  }
+}
+
+async function loadEffectMapFor(file, modelNumber) {
   effectMap = {};
   const key = modelNumber ? modelNumber[0] : undefined;
   currentModelByte = key ?? null;
-  const file = MODEL_TO_MAPPING_FILE[key];
   if (!file) {
     status(`No effect map for model ${key !== undefined ? "0x" + key.toString(16) : "?"} yet - modules will show raw IDs.`);
     return;
@@ -125,7 +165,7 @@ async function connect() {
     return;
   }
 
-  status("Looking for a Zoom pedal…");
+  status("Looking for a pedal…");
   let descriptions;
   try {
     descriptions = await getMIDIDeviceList(midi, midi.inputs, midi.outputs, 150, false);
@@ -133,51 +173,88 @@ async function connect() {
     status("Error scanning MIDI devices: " + e.message, true);
     return;
   }
-  const zoomOnes = descriptions.filter((d) => d.manufacturerID && d.manufacturerID[0] === ZOOM_MANUFACTURER_ID);
-  if (zoomOnes.length === 0) {
-    status("No Zoom pedal found. Check the USB connection and try again.", true);
+
+  const found = findProfileFor(descriptions);
+  if (!found) {
+    status("No supported device found. Connect a Zoom MS Plus pedal, or a Line 6 Bass POD Pro, and try again.", true);
     return;
   }
+  const { profile: matchedProfile, description: desc } = found;
 
   if (device) {
     try { await device.close(); } catch (e) { /* already closed, ignore */ }
   }
 
-  const desc = zoomOnes[0];
-  device = new ZoomDevice(midi, desc);
+  profile = matchedProfile;
+  setTransportAvailability();
+
+  status(`Connecting to ${profile.deviceLabel(desc)}…`);
+  try {
+    profileData = await loadProfileData(profile);
+  } catch (e) {
+    status(`Could not load the ${profile.label} control map: ${e.message}`, true);
+    return;
+  }
+
+  device = profile.createDevice(midi, desc, profileData);
   wireDeviceEvents(device);
 
-  status(`Connecting to ${desc.deviceName}…`);
   try {
     await device.open();
   } catch (e) {
-    status("Could not open the pedal: " + e.message, true);
+    status("Could not open the device: " + e.message, true);
     return;
   }
-  device.parameterEditEnable();
 
-  await loadEffectMapFor(desc.modelNumber);
-  populateLibrary();
-  setConnected(true, device.deviceName || desc.deviceName);
+  if (profile.layout === "chain") {
+    device.parameterEditEnable();
+    await loadEffectMapFor(profile.pickDataFile(desc), desc.modelNumber);
+    populateLibrary();
+  } else {
+    renderFixedPanel(profileData);
+    els.panelModel.textContent = profile.deviceLabel(desc);
+    els.panelProgram.textContent = "--";
+  }
+
+  setConnected(true, profile.deviceLabel(desc));
   status("Connected.");
 
-  try {
-    await device.downloadCurrentPatch();
-  } catch (e) {
-    status("Connected, but couldn't read the current patch: " + e.message, true);
+  if (profile.layout === "chain") {
+    try {
+      await device.downloadCurrentPatch();
+    } catch (e) {
+      status("Connected, but couldn't read the current patch: " + e.message, true);
+    }
+    loadPatchList(); // don't block the UI on a full patch-list read
+  } else {
+    els.crcIndicator.textContent = `${panelControls.size} live controls`;
   }
-  loadPatchList(); // don't block the UI on a full patch-list read
 }
 
 function wireDeviceEvents(dev) {
-  dev.addCurrentPatchChangedListener((d) => renderChain(d.currentPatch));
-  dev.addEffectParameterChangedListener((d, slot, paramNum, value) => {
-    if (slot === selectedSlot) updateKnobDisplay(paramNum, value);
-  });
-  dev.addTempoChangedListener((d, tempo) => { els.patchTempo.textContent = tempo; });
   dev.addOpenCloseListener((d, open) => {
     setConnected(open, d.deviceName);
     status(open ? "Connected." : "Disconnected.");
+  });
+
+  if (profile.layout === "chain") {
+    dev.addCurrentPatchChangedListener((d) => renderChain(d.currentPatch));
+    dev.addEffectParameterChangedListener((d, slot, paramNum, value) => {
+      if (slot === selectedSlot) updateKnobDisplay(paramNum, value);
+    });
+    dev.addTempoChangedListener((d, tempo) => { els.patchTempo.textContent = tempo; });
+    return;
+  }
+
+  // Fixed-panel devices report every change as a control change, whether it
+  // came from the pedal's own front panel, from a MIDI controller, or from a
+  // program change that reset the whole panel.
+  dev.addParameterChangedListener((d, ccNumber, value) => updatePanelControlFromDevice(ccNumber, value));
+  dev.addProgramChangedListener((d, programChangeNumber, label) => {
+    const text = label ?? `PC ${programChangeNumber}`;
+    els.patchNumber.textContent = text;
+    els.panelProgram.textContent = text;
+    status(`Pedal switched to ${text}.`);
   });
 }
 
@@ -606,7 +683,15 @@ function renderKnobs(eff, info, slot) {
 
     const knobEl = unit.querySelector(".knob");
     setKnobVisual(knobEl, value, max);
-    wireKnobDrag(knobEl, slot, paramIndex, max, paramInfo);
+    wireKnobDrag(knobEl, {
+      min: 0,
+      max,
+      getValue: () => device.currentPatch.effectSettings[slot].parameters[paramIndex],
+      onChange: (newValue) => {
+        unit.querySelector(".knob-value").textContent = displayValue(paramInfo, newValue);
+        device.setEffectParameterForCurrentPatch(slot, paramIndex + 2, newValue);
+      },
+    });
   }
 }
 
@@ -615,43 +700,8 @@ function displayValue(paramInfo, value) {
   return String(value);
 }
 
-function setKnobVisual(knobEl, value, max) {
-  const pct = max > 0 ? (value / max) * 100 : 0;
-  const angle = -135 + (270 * (max > 0 ? value / max : 0)); // -135deg..+135deg sweep
-  knobEl.style.setProperty("--pct", pct.toFixed(1));
-  knobEl.style.setProperty("--angle", `${angle.toFixed(1)}deg`);
-}
-
-function wireKnobDrag(knobEl, slot, paramIndex, max, paramInfo) {
-  let dragging = false;
-  let startY = 0;
-  let startValue = 0;
-
-  const onMove = (ev) => {
-    if (!dragging) return;
-    const deltaY = startY - ev.clientY; // dragging up increases value
-    const range = 150; // px of drag for full sweep
-    const deltaValue = Math.round((deltaY / range) * max);
-    const newValue = Math.max(0, Math.min(max, startValue + deltaValue));
-    setKnobVisual(knobEl, newValue, max);
-    const valueEl = knobEl.parentElement.querySelector(".knob-value");
-    valueEl.textContent = displayValue(paramInfo, newValue);
-    device.setEffectParameterForCurrentPatch(slot, paramIndex + 2, newValue);
-  };
-  const onUp = () => {
-    dragging = false;
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-  };
-
-  knobEl.addEventListener("pointerdown", (ev) => {
-    dragging = true;
-    startY = ev.clientY;
-    startValue = device.currentPatch.effectSettings[slot].parameters[paramIndex];
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  });
-}
+// setKnobVisual() and wireKnobDrag() now live in ui/controls.js, shared with
+// the fixed-panel (Bass POD Pro) layout.
 
 function updateKnobDisplay(paramNumber, value) {
   const paramIndex = paramNumber - 2;
@@ -665,9 +715,123 @@ function updateKnobDisplay(paramNumber, value) {
   knobEl.parentElement.querySelector(".knob-value").textContent = displayValue(paramInfo, value);
 }
 
+// --- Fixed-panel rendering (Bass POD Pro) ----------------------------------
+//
+// Unlike the Zoom chain, this panel is data-driven: every control, range and
+// value name comes from the device's profile JSON (renderer/data/), so adding
+// another fixed-panel device means writing a new JSON file plus a protocol
+// adapter, not new UI code.
+
+function renderFixedPanel(data) {
+  els.panelGroups.innerHTML = "";
+  panelControls.clear();
+  if (!data) return;
+
+  for (const group of data.groups || []) {
+    const groupEl = document.createElement("section");
+    groupEl.className = "panel-group";
+    const nameEl = document.createElement("div");
+    nameEl.className = "panel-group-name";
+    nameEl.textContent = group.name;
+    groupEl.appendChild(nameEl);
+
+    const rowEl = document.createElement("div");
+    rowEl.className = "panel-row";
+    for (const control of group.controls || []) {
+      const handle = buildPanelControl(control, data);
+      rowEl.appendChild(handle.el);
+      if (control.cc !== undefined && control.cc !== null) panelControls.set(control.cc, handle);
+    }
+    groupEl.appendChild(rowEl);
+    els.panelGroups.appendChild(groupEl);
+  }
+
+  const count = panelControls.size;
+  els.panelNote.textContent = count === 0
+    ? "This device's control map is empty."
+    : `All ${count} controls are live MIDI control changes on channel ${device?.channel ?? data.channel}. ` +
+      "Values you haven't touched are dimmed with a \"?\" - nothing has told the app what the pedal's " +
+      "current settings are yet (that needs the sys-ex program dump). Move a control here, or turn one " +
+      "on the POD, and the panel learns it.";
+}
+
+function buildPanelControl(control, data) {
+  const base = {
+    label: control.label,
+    title: control.title || "",
+    hint: control.hint || "",
+    // Nothing has reported the pedal's current settings yet, so every control
+    // starts "unset" (dimmed) rather than showing a value we made up.
+    unset: true,
+    value: control.default ?? control.min ?? 0,
+  };
+  const send = (value) => {
+    if (!device?.isOpen) return;
+    device.setParameter(control.cc, value);
+  };
+
+  switch (control.kind) {
+    case "select": {
+      const options = data.valueTables?.[control.table] || [];
+      return buildSelectUnit({
+        ...base,
+        options,
+        onChange: (value) => {
+          send(value);
+          const option = options[value];
+          status(`${control.label}: ${option ? option.name : value}`);
+        },
+      });
+    }
+    case "toggle":
+      return buildToggleUnit({
+        ...base,
+        offValue: control.offValue ?? 0,
+        onValue: control.onValue ?? 127,
+        onChange: (value) => {
+          send(value);
+          status(`${control.label}: ${value >= ((control.offValue ?? 0) + (control.onValue ?? 127)) / 2 ? "on" : "off"}`);
+        },
+      });
+    case "action":
+      return buildActionUnit({
+        label: control.label,
+        title: control.title || "",
+        hint: control.hint || "",
+        onClick: () => {
+          if (!device?.isOpen) return;
+          device.sendProgramChange(control.pc);
+          status(`${control.label} sent to the pedal.`);
+        },
+      });
+    case "knob":
+    default:
+      return buildKnobUnit({
+        ...base,
+        min: control.min ?? 0,
+        max: control.max ?? 127,
+        onChange: (value) => send(value),
+      });
+  }
+}
+
+/** A control change arrived from the pedal - move the matching control. */
+function updatePanelControlFromDevice(ccNumber, value) {
+  const handle = panelControls.get(ccNumber);
+  if (!handle) return;
+  handle.setValue(value);
+}
+
+/** Forget every panel value (used when the device is closed). */
+function resetPanel() {
+  for (const handle of panelControls.values()) handle.setUnset?.();
+  panelControls.clear();
+}
+
 // --- Transport: sync / save / load / backup --------------------------------
 
 async function syncToPedal() {
+  if (profile?.layout === "fixed-panel") return syncPanelToPedal();
   if (!device?.currentPatch) return;
   status("Syncing to pedal…");
   try {
@@ -676,6 +840,25 @@ async function syncToPedal() {
   } catch (e) {
     status("Sync failed: " + e.message, true);
   }
+}
+
+/**
+ * "Sync to Pedal" for a fixed-panel device.
+ *
+ * There is no patch blob to upload over CC, so this replays the panel as
+ * control changes instead. Only controls the app has actually learned a value
+ * for are sent - sending made-up defaults would silently zero the pedal's
+ * knobs, which is worse than doing nothing.
+ */
+function syncPanelToPedal() {
+  if (!device?.isOpen) return;
+  const known = [...panelControls.entries()].filter(([, handle]) => !handle.el.classList.contains("unset"));
+  if (known.length === 0) {
+    status("Nothing to send yet - move a control here, or turn one on the pedal so the panel learns its value.", true);
+    return;
+  }
+  for (const [ccNumber, handle] of known) device.setParameter(ccNumber, handle.getValue());
+  status(`Sent ${known.length} of ${panelControls.size} controls to the pedal.`);
 }
 
 function patchToBytes(patch) {
