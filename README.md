@@ -87,38 +87,59 @@ the app drives it live rather than uploading a patch blob. What works today:
 - ✅ The pedal's own knob movements and program changes are reflected back in
   the UI as they happen
 - ✅ "Sync to Pedal" replays the panel's settings as control changes
-- ❌ Program *names* - they only exist in the pedal's sys-ex program dump
-- ❌ Save/Load/Backup/Restore - same reason; they stay disabled for the POD
-  until the dump is implemented
+- ✅ Reading a program: the patch list shows all 36 programs with their real
+  names (one all-programs sys-ex dump), and clicking one recalls it on the
+  POD and reads it back, so the panel shows what the program actually
+  contains. Connecting does the same for the program the POD is playing.
+- ❌ Save/Load/Backup/Restore - these need the app to *send* a program dump
+  back to the POD, which isn't wired up yet (reading works, writing doesn't)
 
 Two things worth knowing before connecting one:
 
 - The POD Pro has 5-pin DIN MIDI only, so you need a MIDI interface (there's
   no USB-MIDI port). Set the POD's global MIDI Channel to match the app's
   (1 by default) - the POD ignores messages on any other channel.
-- Until the sys-ex read lands, the app has no way to know the pedal's current
-  settings, so controls start dimmed with a "?" rather than showing a made-up
-  value. They stop being dimmed as soon as you move one here, or turn one on
-  the POD. "Sync to Pedal" only ever sends controls it actually knows.
+- Control changes only travel one way: the POD does not report a program's
+  settings when it is recalled, so the app cannot see a knob until it is
+  moved. It reads programs as sys-ex dumps instead, which is why the panel
+  fills in when you connect and when you click a patch in the list.
+- A control the dump says nothing about stays dimmed with a "?" rather than
+  showing a made-up value, and "Sync to Pedal" only ever sends controls it
+  actually knows - it will not zero a knob on the pedal. The noise gate is the
+  one control with a caveat: CC 22 is a switch (0-63 off, 64-127 on) and the
+  gate's actual amount is a parameter that has no control-change number at all,
+  so the dump's on/off bit loads as 64 (on).
 
-One control number is worth double-checking against real hardware: the effect
-*selector* (CC 19) is the only one taken from the control-number column of
-`mapping/Bass POD Pro Sysex - English .pdf` rather than from
-`mapping/bass_pod_pro_mapping.ods`, which lists the 16 effect names but no CC
-number for picking between them.
+Two details come from the POD's own sys-ex document rather than from a
+cross-reference table, and both are quick to check against the pedal:
+
+- The 16 effects are stored as the "Bass Pod Internal Value" column of the
+  EFFECT TYPE PARAMETER TABLE, which is *not* the order the POD's knob lists
+  them in (Orange Phase is 0, Bypass is 10, ...). `valueTables.effects` is
+  ordered by that value, so turning the POD's effect knob should highlight the
+  matching name in the app.
+- Continuous parameters are stored in 6 bits while their control-change range
+  runs 0-126, so a dump reads back as "stored x 2". That is what makes 126 the
+  top of those ranges, and the captured dump agrees (program 1A stores Channel
+  Volume as 63). If a knob ever reads back at exactly half what the POD's
+  display shows, that conversion is the line to change
+  (`sysexLayout.fields[].scale`).
 
 ## To Do
 - Verify functionality with other devices. I only have the MS-60B+ to test
   with so other pedals such as the MS-50G+ are all theoretical.
 - More identifiable effect icons. Just about all of them are completely generic.
-- Bass POD Pro: implement the sys-ex program dump, which is what program
-  names, Save/Load and Backup/Restore need. The envelope is documented in
-  `renderer/devices/BassPodProDevice.js` - request
-  `F0 00 01 0C 02 00 00 <program #> F7`, reply
-  `F0 00 01 0C 02 01 00 <program #> <version> <data> F7`, where `<data>` is
-  160 nibbles of an 80-byte program (all 36 programs at once is 5760 nibbles).
-- Bass POD Pro: confirm CC 19 selects the effect, and that the pedal's global
-  MIDI channel matches, on real hardware.
+- Bass POD Pro: sending a program dump back to the POD, which is what
+  Save/Load/Backup/Restore need. The read side is done
+  (`renderer/devices/bassPodProSysex.js` plus the `sysexLayout` byte map in
+  `renderer/data/bass-pod-pro.json`); the write side needs the same 80 bytes
+  nibble-encoded again, with the version byte the POD expects.
+- Bass POD Pro: the sys-ex-only parameters (compressor ratio/attack/decay,
+  gate threshold and decay, wah, volume pedal, AIR level, D.I. alignment and
+  mix) are decoded but have no controls in the panel yet - they're the extra
+  entries in `sysexLayout.fields`.
+- Bass POD Pro: confirm the two inference points above (effect value order,
+  the 6-bit doubling) against the pedal's own display.
 
 ## Tests
 
@@ -129,10 +150,17 @@ npm test        # same as: node --test test/
 No MIDI hardware, no Electron and no display needed. The vendored protocol
 code in `renderer/lib/` is plain ES modules, so `test/bass-pod-pro.test.mjs`
 drives the real identity-reply parser and the real CC adapter through a fake
-MIDI proxy and asserts the exact bytes on the wire, while
-`test/controls.test.mjs` drives the panel widgets through a minimal DOM stub.
-`renderer/package.json` exists only so the Node test runner treats
-`renderer/**/*.js` as ES modules - the app itself never reads it.
+MIDI proxy and asserts the exact bytes on the wire,
+`test/bass-pod-pro-sysex.test.mjs` does the same for the dump codec and the
+patch-list flow, and `test/controls.test.mjs` drives the panel widgets through
+a minimal DOM stub. `renderer/package.json` exists only so the Node test
+runner treats `renderer/**/*.js` as ES modules - the app itself never reads it.
+
+The dump tests run against real captures in `test/fixtures/`: a Bass POD Pro on
+firmware 1.40 answering an identity request and dump requests, with program 1A
+"Eighties" in its edit buffer. They were taken with `aseqdump` on the pedal's
+MIDI input, and they exist so the byte offsets in `sysexLayout` are checked
+against hardware data instead of against the same document they came from.
 
 ## Packaging as a real installable app
 
@@ -158,11 +186,17 @@ renderer/
   lib/                zoom-explorer core (MIT, unmodified) - protocol, device
                        model, patch (de)serialization
   data/                effect mapping JSON (MIT, unmodified), plus
-                       bass-pod-pro.json - the POD's control map
+                       bass-pod-pro.json - the POD's control map and the byte
+                       layout of its 80-byte programs
   devices/             one protocol adapter per device, and profiles.js which
                        decides what a MIDI identity reply means and which view
                        layout that device gets
+  devices/bassPodProSysex.js
+                       the POD's dump codec: requests, nibble encoding, and
+                       program bytes -> panel values
   ui/controls.js       knobs/selects/toggles shared by both view layouts
   package.json         {"type": "module"} - for the Node test runner only
 test/                  node --test suites (no test dependencies)
+test/fixtures/         real hardware captures the dump tests run against
+mapping/               the source documents the POD's numbers came from
 ```

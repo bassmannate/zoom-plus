@@ -25,6 +25,7 @@ let currentModelByte = null;
 let selectedSlot = null;
 let selectedMemorySlot = null;
 const panelControls = new Map(); // ccNumber -> control handle from ui/controls.js
+let activeProgramNumber = null; // which POD program (0 = 1A) the panel is showing
 
 const el = (id) => document.getElementById(id);
 const els = {
@@ -41,6 +42,7 @@ const els = {
   btnSave: el("btn-save"),
   btnLoad: el("btn-load"),
   patchList: el("patch-list"),
+  sidebarHeader: el("sidebar-header"),
   chainEmpty: el("chain-empty"),
   chainWrap: el("chain-wrap"),
   chain: el("chain"),
@@ -108,6 +110,10 @@ function setConnected(open, name) {
   els.patchName.classList.toggle("hidden", !isChain);
   els.patchTempoWrap.classList.toggle("hidden", !isChain);
 
+  // The sidebar holds patch files for a Zoom pedal and the POD's 36 programs
+  // for a POD; same list, different word.
+  els.sidebarHeader.textContent = isPanel ? "Programs" : "Patches";
+
   if (panelControls.size > 0 && !open) resetPanel();
 
   if (!open) {
@@ -115,6 +121,7 @@ function setConnected(open, name) {
     els.patchName.value = "";
     els.patchTempo.textContent = "--";
     selectedMemorySlot = null;
+    activeProgramNumber = null;
     els.libraryContent.innerHTML = "";
     els.crcIndicator.textContent = "";
   }
@@ -122,7 +129,7 @@ function setConnected(open, name) {
 }
 
 const POD_SYSEX_PENDING_TITLE =
-  "Not available for the Bass POD Pro yet - it needs the sys-ex program dump, which is the next piece of work";
+  "Not available for the Bass POD Pro yet - the app can read a program dump, but writing one back to the POD isn't wired up";
 
 function setTransportAvailability() {
   // Remember the titles the markup came with, so switching between devices
@@ -228,6 +235,10 @@ async function connect() {
     loadPatchList(); // don't block the UI on a full patch-list read
   } else {
     els.crcIndicator.textContent = `${panelControls.size} live controls`;
+    // The POD cannot be read over control changes, so reading it means asking
+    // for dumps: all 36 patch names in one message, then the program it is
+    // actually playing.
+    loadPodProgramList();
   }
 }
 
@@ -254,8 +265,15 @@ function wireDeviceEvents(dev) {
     const text = label ?? `PC ${programChangeNumber}`;
     els.patchNumber.textContent = text;
     els.panelProgram.textContent = text;
+    activeProgramNumber = programNumberFor(programChangeNumber);
+    highlightActiveProgram();
     status(`Pedal switched to ${text}.`);
   });
+
+  // Everything the control changes above cannot tell us: the patch list's
+  // names, and the stored values of a program that was just read.
+  dev.addProgramListChangedListener((d, programs) => renderProgramList(programs));
+  dev.addProgramLoadedListener((d, loaded) => applyProgramValues(loaded));
 }
 
 async function loadPatchList() {
@@ -298,6 +316,96 @@ async function selectPatchFromList(index, li) {
   } catch (e) {
     status(`Could not load patch ${index}: ${e.message}`, true);
   }
+}
+
+// --- Patch list and program dumps, fixed-panel devices (Bass POD Pro) ------
+//
+// Same sidebar as the Zoom side, different meaning: a Zoom patch is a file in
+// the pedal's memory that the app loads into its own editor, while a POD
+// program only exists on the POD. Clicking one recalls it there and reads it
+// back, so what the panel shows is what the hardware is playing.
+
+/** Program number (0 = 1A) for a program change number, or null. */
+function programNumberFor(programChangeNumber) {
+  const index = programChangeNumber - (profileData?.programs?.pcBase ?? 1);
+  const count = profileData?.programs?.count ?? 0;
+  return index >= 0 && index < count ? index : null;
+}
+
+function renderProgramList(programs) {
+  els.patchList.innerHTML = "";
+  for (const program of programs) {
+    const li = document.createElement("li");
+    if (program.programNumber === activeProgramNumber) li.classList.add("active");
+    li.innerHTML = `<span class="p-num">${escapeHtml(program.label ?? "??")}</span>` +
+      `<span class="p-name">${escapeHtml(program.name || "(empty)")}</span>`;
+    li.addEventListener("click", () => selectProgramFromList(program.programNumber));
+    els.patchList.appendChild(li);
+  }
+}
+
+/** Rows are always in program order, so the row index is the program number. */
+function highlightActiveProgram() {
+  [...els.patchList.children].forEach((li, index) => li.classList.toggle("active", index === activeProgramNumber));
+}
+
+/** Reads the POD's patch names, then the program it is actually playing. */
+async function loadPodProgramList() {
+  if (!device?.isOpen) return;
+  status("Reading the POD's patch list…");
+  try {
+    const programs = await device.requestProgramNames();
+    if (!programs || programs.length === 0) {
+      status("The POD didn't send its patch list - check that its MIDI channel matches the app's.", true);
+      return;
+    }
+    status(`Read ${programs.length} patch names from the POD.`);
+    const current = await device.requestEditBufferDump();
+    status(current ? "Panel loaded from the POD." : "Read the patch list, but not the current program.");
+  } catch (e) {
+    status("Could not read the POD's patch list: " + e.message, true);
+  }
+}
+
+async function selectProgramFromList(programNumber) {
+  if (!device?.isOpen) return;
+  const label = device.programLabelFor(device.programChangeFor(programNumber)) ?? `program ${programNumber + 1}`;
+  status(`Recalling ${label} on the POD…`);
+  const loaded = await device.loadProgram(programNumber);
+  if (!loaded) {
+    status(`${label} came back empty - check that the POD's MIDI channel matches the app's.`, true);
+    return;
+  }
+  status(`Loaded ${label}${loaded.name ? " " + loaded.name : ""} from the POD.`);
+}
+
+/**
+ * Paints a program dump onto the panel.
+ *
+ * This is the only way these controls ever get a value without somebody
+ * moving them - the POD does not report a program as control changes - which
+ * is why the panel is dimmed until a dump has been read. Controls the dump
+ * says nothing about stay dimmed, so "Sync to Pedal" can still refuse to
+ * invent values for them.
+ */
+function applyProgramValues(loaded) {
+  let fromDump = 0;
+  for (const [ccNumber, value] of loaded.values) {
+    const handle = panelControls.get(ccNumber);
+    if (!handle) continue; // a dump field this panel has no control for
+    handle.setValue(value);
+    fromDump++;
+  }
+  if (loaded.programNumber !== undefined) activeProgramNumber = loaded.programNumber;
+  highlightActiveProgram();
+
+  const label = loaded.label ?? "Current patch";
+  els.panelProgram.textContent = loaded.name ? `${label} ${loaded.name}` : label;
+  els.crcIndicator.textContent = `${fromDump} of ${panelControls.size} controls from the dump`;
+  els.panelNote.textContent = fromDump >= panelControls.size
+    ? "Every value on this panel was read from the POD's sys-ex program dump."
+    : `Values read from the POD's dump: ${fromDump} of ${panelControls.size} controls. The rest are ` +
+      "not in the dump (or the dump cannot pin them down), so they stay dimmed.";
 }
 
 // --- Signal chain rendering ------------------------------------------------
@@ -750,9 +858,9 @@ function renderFixedPanel(data) {
   els.panelNote.textContent = count === 0
     ? "This device's control map is empty."
     : `All ${count} controls are live MIDI control changes on channel ${device?.channel ?? data.channel}. ` +
-      "Values you haven't touched are dimmed with a \"?\" - nothing has told the app what the pedal's " +
-      "current settings are yet (that needs the sys-ex program dump). Move a control here, or turn one " +
-      "on the POD, and the panel learns it.";
+      "Connecting reads the program the POD is playing, so the panel shows what is really in it; click a patch " +
+      "in the list to recall that program and read it back. Anything the dump cannot tell us stays dimmed with a " +
+      "\"?\", and turning a knob here (or on the POD) updates the panel live.";
 }
 
 function buildPanelControl(control, data) {

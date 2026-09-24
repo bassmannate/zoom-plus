@@ -1,6 +1,22 @@
 import { MessageType } from "../lib/midiproxy.js";
 import { getChannelMessage } from "../lib/miditools.js";
 import { shouldLog, LogLevel } from "../lib/Logger.js";
+import {
+    DUMP_TYPE_ALL_PROGRAMS,
+    DUMP_TYPE_EDIT_BUFFER,
+    DUMP_TYPE_PROGRAM,
+    PROGRAM_BYTE_COUNT,
+    SYSEX_END,
+    SYSEX_START,
+    buildAllProgramsDumpRequest,
+    buildEditBufferDumpRequest,
+    buildProgramDumpRequest,
+    isDecodableDump,
+    parseDumpMessage,
+    readPatchName,
+    readProgram,
+    splitPrograms,
+} from "./bassPodProSysex.js";
 
 // ---------------------------------------------------------------------------
 // Line 6 Bass POD Pro - live MIDI control-change adapter.
@@ -20,14 +36,20 @@ import { shouldLog, LogLevel } from "../lib/Logger.js";
 //   all programs reply      F0 00 01 0C 02 01 02 <version> <data> F7
 //
 // <data> is nibble-encoded: 160 bytes for one 80-byte program, 5760 bytes for
-// all 36 programs (2880 bytes = 36 x 80). Those dump messages are NOT
-// implemented here yet - this class currently speaks CC only, which is what
-// the fixed-panel UI uses. The envelope above is recorded so the dump pass has
-// the request/response formats to hand.
+// all 36 programs (2880 bytes = 36 x 80). That path is implemented here,
+// because a dump is the only way to *read* this device: the POD does NOT
+// report its parameters as control changes when a program is recalled (checked
+// against real hardware - see README.md), so the app has to ask for a dump
+// instead of listening for one.
+//
+// The byte-level codec lives in bassPodProSysex.js; this class owns the
+// transport, the request bookkeeping and the events the UI listens for.
 //
 // Control numbers, ranges and value names come from
-// mapping/bass_pod_pro_mapping.ods and are carried in the device's profile
-// JSON (renderer/data/bass-pod-pro.json) rather than being hard-coded here.
+// mapping/bass_pod_pro_mapping.ods, the 80-byte program layout from
+// mapping/Bass POD Pro Sysex - English .pdf, and both are carried in the
+// device's profile JSON (renderer/data/bass-pod-pro.json) rather than being
+// hard-coded here.
 // ---------------------------------------------------------------------------
 
 // A control we just told the POD about should not bounce straight back and
@@ -35,6 +57,22 @@ import { shouldLog, LogLevel } from "../lib/Logger.js";
 // interface in "thru" mode (or a loopback port) can, so anything arriving
 // within this window for a control we just sent is treated as our own echo.
 const ECHO_SUPPRESSION_MS = 200;
+
+// How long to wait for a dump reply before giving up. A single-program reply is
+// 169 bytes, which is a blink; the all-programs reply is 5769 bytes, most of two
+// seconds at MIDI's 31.25kbps, so it gets a budget of its own. A request that
+// never gets an answer (POD on another MIDI channel, or sitting in a menu) must
+// not leave the UI hanging on a promise.
+const DEFAULT_DUMP_TIMEOUT_MS = 1500;
+const ALL_PROGRAMS_DUMP_TIMEOUT_MS = 6000;
+
+// A long sys-ex arrives in pieces rather than as one message: a Bass POD Pro on
+// firmware 1.40 delivers the 36-program dump as 23 chunks of 256 bytes, where
+// only the first starts with F0 and only the last ends with F7 (captured in
+// test/fixtures/bass-pod-pro-all-programs.txt). Web MIDI hands the renderer the
+// same pieces, so they are stitched back together before anything is parsed.
+// The limit just stops a dump that never finishes from being buffered forever.
+const SYSEX_BUFFER_LIMIT = 64 * 1024;
 
 export class BassPodProDevice {
     static PROGRAM_CHANGE_MANUAL = 0;
@@ -44,7 +82,7 @@ export class BassPodProDevice {
      * @param midi A MIDIProxy implementation (renderer: MIDIProxyForWebMIDIAPI)
      * @param midiDevice The MIDIDeviceDescription this device was identified as
      * @param profileData Parsed contents of renderer/data/bass-pod-pro.json
-     * @param options { channel, now }
+     * @param options { channel, now, dumpTimeoutMs }
      */
     constructor(midi, midiDevice, profileData, options = {}) {
         this._midi = midi;
@@ -64,6 +102,20 @@ export class BassPodProDevice {
         this._recentlySent = new Map(); // ccNumber -> timestamp
         this._ccToControl = buildControlLookup(profileData);
         this._midiMessageHandler = (_deviceHandle, data) => this._handleMessage(data);
+        // Sys-ex program dumps. "programs" is filled from the all-programs
+        // dump and is what the patch list shows.
+        this._sysexLayout = profileData?.sysexLayout ?? null;
+        this._programs = [];
+        this._programListListeners = [];
+        this._programLoadedListeners = [];
+        this._pendingDumps = [];
+        // Explicit override, used by the tests; otherwise each dump type gets
+        // its own budget (see _timeoutFor).
+        this._dumpTimeoutMs = options.dumpTimeoutMs;
+        this._sysexBuffer = [];
+        // Which program the POD is on, so an edit-buffer dump (which carries no
+        // program number) can still be labelled.
+        this._currentProgramChange = undefined;
     }
 
     get isOpen() {
@@ -139,12 +191,216 @@ export class BassPodProDevice {
     sendProgramChange(programChangeNumber) {
         if (!this._isOpen) return;
         this._midi.sendPC(this._midiDevice.outputID, this._channel, programChangeNumber & 0x7f);
+        this._currentProgramChange = programChangeNumber & 0x7f;
+    }
+
+    // --- Programs (sys-ex) -------------------------------------------------
+    //
+    // Reading is sys-ex only. The POD doesn't broadcast its settings when a
+    // program is recalled, so "what is in this patch?" has to be asked for.
+
+    /** How many internal programs this device has. */
+    get programCount() {
+        return this._profile?.programs?.count ?? 0;
+    }
+
+    /** Cached program list; empty until an all-programs dump has been read. */
+    get programs() {
+        return this._programs;
+    }
+
+    /** Program number (0 = 1A) -> program change number (1 = 1A). */
+    programChangeFor(programNumber) {
+        return programNumber + (this._profile?.programs?.pcBase ?? 1);
+    }
+
+    /**
+     * Reads every program's name in one message, by asking for the
+     * all-programs dump. Safe to call at any time: it is a read, and the POD
+     * answers with whatever is stored in it.
+     * @returns the program list, or undefined if no reply arrived in time
+     */
+    async requestProgramNames() {
+        if (!this._isOpen) return undefined;
+        const pending = this._awaitDump(DUMP_TYPE_ALL_PROGRAMS);
+        this._midi.send(this._midiDevice.outputID, buildAllProgramsDumpRequest());
+        return await pending;
+    }
+
+    /**
+     * Reads one stored program.
+     * @returns { programNumber, name, values } - values is a Map of
+     *          control-change number -> value - or undefined on timeout
+     */
+    async requestProgramDump(programNumber) {
+        if (!this._isOpen) return undefined;
+        const pending = this._awaitDump(DUMP_TYPE_PROGRAM);
+        this._midi.send(this._midiDevice.outputID, buildProgramDumpRequest(programNumber));
+        return await pending;
+    }
+
+    /**
+     * Reads the edit buffer: the program the POD is playing right now, edits
+     * and all. Same 80-byte shape as a stored program, but with no program
+     * number in the reply.
+     */
+    async requestEditBufferDump() {
+        if (!this._isOpen) return undefined;
+        const pending = this._awaitDump(DUMP_TYPE_EDIT_BUFFER);
+        this._midi.send(this._midiDevice.outputID, buildEditBufferDumpRequest());
+        return await pending;
+    }
+
+    /**
+     * What clicking a patch in the list does: recall that program on the POD,
+     * then read it back so the panel shows what the program really contains.
+     * @returns the loaded program, or undefined if the dump didn't arrive
+     */
+    async loadProgram(programNumber) {
+        if (!this._isOpen) return undefined;
+        this.sendProgramChange(this.programChangeFor(programNumber));
+        return await this.requestProgramDump(programNumber);
+    }
+
+    // --- Dump bookkeeping --------------------------------------------------
+
+    /** How long to wait for a given kind of dump. */
+    _timeoutFor(type) {
+        if (this._dumpTimeoutMs !== undefined) return this._dumpTimeoutMs;
+        return type === DUMP_TYPE_ALL_PROGRAMS ? ALL_PROGRAMS_DUMP_TIMEOUT_MS : DEFAULT_DUMP_TIMEOUT_MS;
+    }
+
+    /** Registers interest in the next reply of a given dump type. */
+    _awaitDump(type) {
+        return new Promise((resolve) => {
+            const entry = { type, resolve, timer: undefined };
+            entry.timer = setTimeout(() => {
+                this._pendingDumps = this._pendingDumps.filter((p) => p !== entry);
+                shouldLog(LogLevel.Midi) && console.log(
+                    `BassPodProDevice: no reply to sys-ex dump request type ${type} - is the POD listening on MIDI channel ${this.channel}?`);
+                resolve(undefined);
+            }, this._timeoutFor(type));
+            this._pendingDumps.push(entry);
+        });
+    }
+
+    /**
+     * Collects sys-ex chunks until a whole message has arrived, then parses it.
+     *
+     * The POD sends a long dump as a run of messages, not one: the first begins
+     * with F0, the ones after it are the continuation, and only the last carries
+     * the F7 end-of-exclusive. Anything that starts with F0 therefore starts a
+     * new message, and whatever was in the buffer was an unfinished one.
+     */
+    _handleSysex(data) {
+        if (data[0] === SYSEX_START) this._sysexBuffer = [];
+        for (const byte of data) this._sysexBuffer.push(byte);
+
+        if (this._sysexBuffer.length > SYSEX_BUFFER_LIMIT) {
+            shouldLog(LogLevel.Warn) && console.log("BassPodProDevice: dropping a sys-ex dump that never ended");
+            this._sysexBuffer = [];
+            return;
+        }
+        if (this._sysexBuffer[this._sysexBuffer.length - 1] !== SYSEX_END) return; // more to come
+
+        const message = this._sysexBuffer;
+        this._sysexBuffer = [];
+        const parsed = parseDumpMessage(message);
+        if (isDecodableDump(parsed)) this._handleDump(parsed);
+    }
+
+    /** Hands a reply to everyone waiting on that type. */
+    _resolveDump(type, result) {
+        const waiting = this._pendingDumps.filter((p) => p.type === type);
+        this._pendingDumps = this._pendingDumps.filter((p) => p.type !== type);
+        for (const entry of waiting) {
+            clearTimeout(entry.timer);
+            entry.resolve(result);
+        }
+    }
+
+    /** Turns the 36 program blobs of an all-programs dump into the patch list. */
+    _setProgramList(programBlobs) {
+        const count = Math.min(this.programCount || programBlobs.length, programBlobs.length);
+        const list = [];
+        for (let i = 0; i < count; i++) {
+            const programChangeNumber = this.programChangeFor(i);
+            list.push({
+                programNumber: i,
+                programChangeNumber,
+                label: this.programLabelFor(programChangeNumber),
+                name: readPatchName(programBlobs[i], this._sysexLayout),
+            });
+        }
+        this._programs = list;
+        for (const listener of this._programListListeners) listener(this, list);
+    }
+
+    /**
+     * A dump arrived. This is where the app learns everything control changes
+     * cannot tell it: the patch names, and every parameter's stored value.
+     */
+    _handleDump(parsed) {
+        const size = this._sysexLayout?.programByteCount ?? PROGRAM_BYTE_COUNT;
+        const version = this._sysexLayout?.version ?? 1;
+        if (parsed.version !== undefined && parsed.version !== version) {
+            shouldLog(LogLevel.Warn) && console.log(
+                `BassPodProDevice: dump says version ${parsed.version}, the field map in the profile is for ${version}`);
+        }
+
+        if (parsed.type === DUMP_TYPE_ALL_PROGRAMS) {
+            this._setProgramList(splitPrograms(parsed.bytes, size));
+            this._resolveDump(DUMP_TYPE_ALL_PROGRAMS, this._programs);
+            return;
+        }
+
+        // A truncated dump is worse than no dump: it would read as a program
+        // full of zeros, so drop it rather than report invented values.
+        if (parsed.byteCount < size) {
+            shouldLog(LogLevel.Midi) && console.log(
+                `BassPodProDevice: ignoring a ${parsed.byteCount}-byte dump (expected ${size})`);
+            return;
+        }
+
+        const program = readProgram(parsed.bytes, this._sysexLayout);
+        const programNumber = parsed.type === DUMP_TYPE_PROGRAM ? parsed.programNumber : undefined;
+        const programChangeNumber = programNumber === undefined
+            ? this._currentProgramChange
+            : this.programChangeFor(programNumber);
+        if (programNumber !== undefined) this._rememberProgramName(programNumber, program.name);
+
+        const payload = {
+            type: parsed.type,
+            programNumber,
+            programChangeNumber,
+            label: programChangeNumber === undefined ? undefined : this.programLabelFor(programChangeNumber),
+            name: program.name,
+            values: program.values,
+        };
+        for (const listener of this._programLoadedListeners) listener(this, payload);
+        this._resolveDump(parsed.type, payload);
+    }
+
+    /** Keeps the patch list's name in step with a program that was just read. */
+    _rememberProgramName(programNumber, name) {
+        const entry = this._programs[programNumber];
+        if (!entry || entry.name === name) return;
+        entry.name = name;
+        for (const listener of this._programListListeners) listener(this, this._programs);
     }
 
     // --- Inbound -----------------------------------------------------------
 
     _handleMessage(data) {
         const [messageType, , data1, data2] = getChannelMessage(data);
+
+        // Program data only ever arrives by sys-ex, usually in several chunks -
+        // see _handleSysex(). A dump request we sent bounces back as opcode 00
+        // (request, not reply) and is ignored by isDecodableDump().
+        if (messageType === MessageType.SysEx) {
+            this._handleSysex(data);
+            return;
+        }
 
         if (messageType === MessageType.CC) {
             const sentAt = this._recentlySent.get(data1);
@@ -202,6 +458,24 @@ export class BassPodProDevice {
 
     removeProgramChangedListener(listener) {
         this._programChangedListeners = this._programChangedListeners.filter((l) => l !== listener);
+    }
+
+    /** listener(device, programs[]) - the patch list, or one name in it, changed. */
+    addProgramListChangedListener(listener) {
+        this._programListListeners.push(listener);
+    }
+
+    removeProgramListChangedListener(listener) {
+        this._programListListeners = this._programListListeners.filter((l) => l !== listener);
+    }
+
+    /** listener(device, { type, programNumber, label, name, values }) */
+    addProgramLoadedListener(listener) {
+        this._programLoadedListeners.push(listener);
+    }
+
+    removeProgramLoadedListener(listener) {
+        this._programLoadedListeners = this._programLoadedListeners.filter((l) => l !== listener);
     }
 }
 
