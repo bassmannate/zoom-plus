@@ -4,10 +4,10 @@
 //
 //   npm test
 //
-// The dump assertions run against a real capture: a Bass POD Pro (firmware
-// 1.40) answering an edit-buffer request while program 1A "Eighties" was in
-// its edit buffer. The capture is kept in
-// test/fixtures/bass-pod-pro-edit-buffer.txt, and README.md says how it was
+// The dump assertions run against two real captures: a Bass POD Pro (firmware
+// 1.40) answering an edit-buffer request (test/fixtures/bass-pod-pro-edit-buffer.txt)
+// and answering an all-programs request split across 23 messages
+// (test/fixtures/bass-pod-pro-all-programs.txt). README.md says how they were
 // taken. Everything else in here is synthesised.
 
 import test from "node:test";
@@ -54,6 +54,22 @@ const captured = messagesIn("bass-pod-pro-edit-buffer.txt");
 const capturedIdentity = captured.find((m) => m[1] === 0x7e);
 const capturedDump = captured.find((m) => m[1] === 0x00);
 const capturedProgram = decodeNibbles(capturedDump.slice(8, capturedDump.length - 1));
+
+/**
+ * The real all-programs capture, as the pieces it arrived in: a Bass POD Pro
+ * sends 5769 bytes as a run of ~256-byte messages, not one big one.
+ */
+function capturedAllProgramChunks() {
+  return readFileSync(path.join(repoRoot, "test/fixtures/bass-pod-pro-all-programs.txt"), "utf8")
+    .split("\n")
+    .filter((line) => line.includes("exclusive"))
+    .map((line) => line.split("exclusive")[1].trim().split(/\s+/).map((hex) => parseInt(hex, 16)));
+}
+
+/** The 36 programs from that capture, reassembled the way the app does it. */
+function capturedAllPrograms() {
+  return splitPrograms(parseDumpMessage(capturedAllProgramChunks().flat()).bytes, layout.programByteCount);
+}
 
 /** A dump reply carrying the given program bytes, as the POD sends it. */
 function dumpReply({ type, programNumber, programBytes, version = 1 }) {
@@ -164,7 +180,7 @@ test("parseDumpMessage only claims messages that really are POD dumps", () => {
 
 test("a real program decodes into the panel's control values", () => {
   const { name, values } = readProgram(capturedProgram, layout);
-  assert.equal(name, "Eighties", "program 1A's factory name, straight out of the dump");
+  assert.equal(name, "Eighties", "the patch the POD was playing, straight out of the dump");
 
   // Every number comes from that capture; the comment names the program byte
   // behind it, so a decode bug points at the byte that moved.
@@ -329,7 +345,7 @@ test("the edit buffer comes back labelled with the program the POD reported", as
   const replies = new Map([
     [DUMP_TYPE_EDIT_BUFFER, dumpReply({ type: DUMP_TYPE_EDIT_BUFFER, programBytes: capturedProgram })],
   ]);
-  const { device } = await openFakeDevice(replies);
+  const { midi, device } = await openFakeDevice(replies);
 
   const loaded = await device.requestEditBufferDump();
   assert.equal(loaded.name, "Eighties");
@@ -337,10 +353,41 @@ test("the edit buffer comes back labelled with the program the POD reported", as
   assert.equal(loaded.programNumber, undefined, "the edit buffer carries no program number");
   assert.equal(loaded.label, undefined, "and nothing has told the app which program is playing yet");
 
-  // Once a program change has been seen (or sent), the label is known.
+  // Once a program change has been sent, the label is known - and the app can
+  // tell its own moves from the pedal's.
   device.sendProgramChange(1);
+  assert.equal(device.currentProgramChangeNumber, 1);
+  assert.equal(device.lastSentProgramChangeNumber, 1);
   const second = await device.requestEditBufferDump();
   assert.equal(second.label, "1A");
+
+  // A program change the pedal sends from its own front panel moves the
+  // current program, but must not look like one the app sent - that is what
+  // stops app.js from skipping the read it needs to do.
+  midi.emitInbound([0xc0, 9]);
+  assert.equal(device.currentProgramChangeNumber, 9, "the pedal moved to 3A");
+  assert.equal(device.lastSentProgramChangeNumber, 1, "and we still know what we last sent");
+  await device.close();
+});
+
+test("a program change the app sent is not reported straight back as the pedal's", async () => {
+  let now = 1000;
+  const { midi, device } = await openFakeDevice(new Map(), { now: () => now });
+  const reported = [];
+  device.addProgramChangedListener((d, pc, label) => reported.push(`${pc}=${label}`));
+
+  device.sendProgramChange(5); // asking for 2A
+  midi.emitInbound([0xc0, 5]); // ...and it comes straight back
+  assert.deepEqual(reported, [], "our own program change is swallowed");
+  assert.equal(device.currentProgramChangeNumber, 5, "but the app still knows where the POD is");
+
+  now += 500; // well past the suppression window
+  midi.emitInbound([0xc0, 5]);
+  assert.deepEqual(reported, ["5=2A"], "a change that arrives later is the pedal's own");
+
+  midi.emitInbound([0xc0, 1]);
+  assert.deepEqual(reported, ["5=2A", "1=1A"]);
+  assert.equal(device.currentProgramChangeNumber, 1);
   await device.close();
 });
 
@@ -361,4 +408,125 @@ test("a truncated dump is ignored rather than read as a program of zeros", async
   const loaded = await device.requestEditBufferDump();
   assert.equal(loaded, undefined, "the app would rather have nothing than invented values");
   await device.close();
+});
+
+// --- Chunked dumps ---------------------------------------------------------
+
+test("fixture: real hardware sends the all-programs reply in chunks, not one message", () => {
+  const chunks = capturedAllProgramChunks();
+
+  assert.ok(chunks.length > 5, `expected a run of messages, got ${chunks.length}`);
+  assert.ok(chunks.every((chunk) => chunk.length <= 256), "no chunk is longer than ALSA's 256-byte sys-ex limit");
+
+  const bytes = chunks.flat();
+  assert.equal(bytes.length, 7 + 1 + 36 * PROGRAM_BYTE_COUNT * 2 + 1, "header, version, 5760 nibbles, EOX");
+  assert.equal(bytes[0], 0xf0, "only the first chunk carries the F0 status byte");
+  assert.equal(bytes[bytes.length - 1], 0xf7, "only the last chunk carries the end-of-exclusive");
+  assert.equal(bytes.filter((byte) => byte === 0xf0).length, 1);
+  assert.equal(bytes.filter((byte) => byte === 0xf7).length, 1);
+
+  const parsed = parseDumpMessage(bytes);
+  assert.equal(parsed.opcode, 0x01);
+  assert.equal(parsed.type, DUMP_TYPE_ALL_PROGRAMS);
+  assert.equal(parsed.version, 1);
+  assert.equal(parsed.byteCount, 2880);
+  assert.equal(splitPrograms(parsed.bytes, layout.programByteCount).length, 36);
+});
+
+test("a dump that arrives in pieces is stitched back together by the adapter", async () => {
+  const reply = allProgramsReply();
+  const chunks = [];
+  for (let i = 0; i < reply.length; i += 256) chunks.push(reply.slice(i, i + 256));
+  assert.ok(chunks.length > 5, "the fake reply is split the way the POD splits it");
+
+  const { midi, device } = await openFakeDevice(new Map());
+  const knobMoves = [];
+  device.addParameterChangedListener((d, ccNumber, value) => knobMoves.push([ccNumber, value]));
+
+  const pending = device.requestProgramNames();
+  for (const [index, chunk] of chunks.entries()) {
+    if (index === 3) midi.emitInbound([0xb0, 13, 40]); // a knob moves mid-dump
+    midi.emitInbound(chunk);
+  }
+
+  const listed = await pending;
+  assert.equal(listed.length, 36);
+  assert.equal(listed[0].name, "Patch 1");
+  assert.equal(listed[35].name, "Patch 36");
+  assert.deepEqual(knobMoves, [[13, 40]], "control changes still get through while a dump is arriving");
+  await device.close();
+});
+
+test("a dump that never finished doesn't corrupt the next one", async () => {
+  const { midi, device } = await openFakeDevice(new Map());
+
+  midi.emitInbound(allProgramsReply().slice(0, 100)); // cut off mid-message
+  const pending = device.requestEditBufferDump();
+  midi.emitInbound(dumpReply({ type: DUMP_TYPE_EDIT_BUFFER, programBytes: capturedProgram }));
+
+  const loaded = await pending;
+  assert.equal(loaded.name, "Eighties", "the half-message was dropped, not glued to the front");
+  await device.close();
+});
+
+// --- The real all-programs capture, checked against the profile's tables ----
+
+test("fixture: the patch names, amp codes, cabinet codes and effect codes agree", () => {
+  const programs = capturedAllPrograms();
+  const programAt = (index) => readProgram(programs[index], layout);
+  const tables = profileData.valueTables;
+
+  // Each of these programs is named after the model it was built from, which is
+  // how these tables were checked against hardware. CC 12 is the amp model, CC
+  // 71 the cabinet, CC 19 the effect, CC 60 effect on/off.
+  const checks = [
+    [0, "Star Spangled Ja", 7, 15],
+    [12, "Eighties", 5, 0],
+    [20, "Rock Classic", 8, 11],
+    [31, "Jazz Tone", 3, 6],
+    [35, "Amp 360", 7, 15],
+  ];
+  for (const [index, name, ampCode, cabinetCode] of checks) {
+    const program = programAt(index);
+    assert.equal(program.name, name, `program ${index}'s name`);
+    assert.equal(program.values.get(12), ampCode, `${name}: amp model code`);
+    assert.equal(program.values.get(71), cabinetCode, `${name}: cabinet code`);
+    assert.ok(tables.ampModels[ampCode]?.name, `the amp table has no entry ${ampCode}`);
+    assert.ok(tables.cabinets[cabinetCode]?.name, `the cabinet table has no entry ${cabinetCode}`);
+  }
+
+  assert.equal(tables.ampModels[3].name, "Jazz Tone");
+  assert.equal(tables.cabinets[6].name, "1x15 Polytone Mini-Brute", "the cabinet that goes with the Jazz Tone amp");
+  assert.equal(tables.cabinets[11].name, "8x10 Ampeg SVT", "and the one that goes with Rock Classic");
+
+  // The effect codes are why valueTables.effects is ordered the way it is: the
+  // program called "Jaco clean chorus" stores 9, which the POD's own effect
+  // table calls Analog Chorus, and "Jaco Tone" stores the same 9 with the
+  // effect switched off.
+  assert.equal(tables.effects[9].name, "Analog Chorus");
+  assert.equal(programAt(1).values.get(19), 9, "Jaco clean chorus");
+  assert.equal(programAt(1).values.get(60), 127, "with the effect on");
+  assert.equal(programAt(2).values.get(19), 9, "Jaco Tone uses the same effect");
+  assert.equal(programAt(2).values.get(60), 0, "switched off");
+
+  const bypassed = programs.filter((program) => readProgramValues(program, layout).get(19) === 10);
+  assert.equal(bypassed.length, 26, "26 of the 36 programs are Bypass");
+  assert.equal(tables.effects[10].name, "Bypass");
+});
+
+test("fixture: every program decodes inside the documented ranges", () => {
+  for (const [index, program] of capturedAllPrograms().entries()) {
+    const values = readProgramValues(program, layout);
+    for (const field of layout.fields) {
+      const value = values.get(field.cc);
+      assert.ok(value >= 0 && value <= 127, `program ${index}, ${field.id} = ${value}`);
+      if (field.mode === "scale") {
+        assert.ok(value <= 126, `program ${index}, ${field.id} = ${value}: a 6-bit field doubled stays inside 0-126`);
+      }
+      if (field.mode === "value" && field.bits) {
+        const width = field.bits[0] - field.bits[1] + 1;
+        assert.ok(value < 2 ** width, `program ${index}, ${field.id} = ${value} exceeds its ${width}-bit field`);
+      }
+    }
+  }
 });

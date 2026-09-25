@@ -91,6 +91,13 @@ the app drives it live rather than uploading a patch blob. What works today:
   names (one all-programs sys-ex dump), and clicking one recalls it on the
   POD and reads it back, so the panel shows what the program actually
   contains. Connecting does the same for the program the POD is playing.
+- ✅ Following the POD: change program on the pedal itself - footswitches, the
+  program knob, or the Manual/Tuner buttons - and the app reads the newly
+  selected program and paints it on. The POD announces the change with a
+  program change but sends none of the new program's values, so the app has to
+  ask for it. Manual and the tuner have no stored program behind them, so the
+  panel goes back to "unknown" (dimmed) instead of leaving the last patch on
+  screen looking current.
 - ❌ Save/Load/Backup/Restore - these need the app to *send* a program dump
   back to the POD, which isn't wired up yet (reading works, writing doesn't)
 
@@ -110,20 +117,28 @@ Two things worth knowing before connecting one:
   gate's actual amount is a parameter that has no control-change number at all,
   so the dump's on/off bit loads as 64 (on).
 
-Two details come from the POD's own sys-ex document rather than from a
-cross-reference table, and both are quick to check against the pedal:
+The amp, cabinet and effect tables were checked against a dump of a real POD's
+36 programs, which is worth a paragraph because it corrected one of them:
 
 - The 16 effects are stored as the "Bass Pod Internal Value" column of the
-  EFFECT TYPE PARAMETER TABLE, which is *not* the order the POD's knob lists
-  them in (Orange Phase is 0, Bypass is 10, ...). `valueTables.effects` is
-  ordered by that value, so turning the POD's effect knob should highlight the
-  matching name in the app.
+  EFFECT TYPE PARAMETER TABLE in the PDF, which is *not* the order the POD's
+  knob cycles through them (Orange Phase is 0, Bypass is 10, ...).
+  `valueTables.effects` is in that order, and the dump agrees: the program
+  called "Jaco clean chorus" stores 9, which that table calls Analog Chorus,
+  and 26 of the 36 programs store 10 - Bypass.
+- The amp and cabinet codes line up the same way, which is how those tables
+  were checked: "Jazz Tone" stores the Jazz Tone amp code and its Polytone
+  cabinet, "Rock Classic" the Ampeg SVT head and the 8x10 to go with it.
 - Continuous parameters are stored in 6 bits while their control-change range
   runs 0-126, so a dump reads back as "stored x 2". That is what makes 126 the
-  top of those ranges, and the captured dump agrees (program 1A stores Channel
-  Volume as 63). If a knob ever reads back at exactly half what the POD's
-  display shows, that conversion is the line to change
-  (`sysexLayout.fields[].scale`).
+  top of those ranges, and every program in that dump decodes inside it. If a
+  knob ever reads back at exactly half what the POD's display shows, that
+  conversion is the line to change (`sysexLayout.fields[].scale`).
+
+One more thing the hardware made clear: a long dump does not arrive as a single
+sys-ex message. The all-programs reply came back as 23 messages of 256 bytes,
+where only the first carries the F0 and only the last carries the F7, so the
+app stitches them back together before parsing (see `_handleSysex()`).
 
 ## To Do
 - Verify functionality with other devices. I only have the MS-60B+ to test
@@ -138,8 +153,10 @@ cross-reference table, and both are quick to check against the pedal:
   gate threshold and decay, wah, volume pedal, AIR level, D.I. alignment and
   mix) are decoded but have no controls in the panel yet - they're the extra
   entries in `sysexLayout.fields`.
-- Bass POD Pro: confirm the two inference points above (effect value order,
-  the 6-bit doubling) against the pedal's own display.
+- Bass POD Pro: confirm on hardware that the POD announces program changes made
+  on its own front panel (the sys-ex PDF says it transmits 0 = Manual, 1-36,
+  Tuner = 37; capturing it needs somebody to step on the pedal). The app
+  follows those changes when they arrive.
 
 ## Tests
 
@@ -157,10 +174,12 @@ a minimal DOM stub. `renderer/package.json` exists only so the Node test
 runner treats `renderer/**/*.js` as ES modules - the app itself never reads it.
 
 The dump tests run against real captures in `test/fixtures/`: a Bass POD Pro on
-firmware 1.40 answering an identity request and dump requests, with program 1A
-"Eighties" in its edit buffer. They were taken with `aseqdump` on the pedal's
-MIDI input, and they exist so the byte offsets in `sysexLayout` are checked
-against hardware data instead of against the same document they came from.
+firmware 1.40 answering an identity request and an edit-buffer request (while a
+patch named "Eighties" was in its edit buffer), and answering an all-programs
+request - which also pins down the chunked delivery, since that reply arrives as
+23 messages rather than one. They exist so the byte offsets in `sysexLayout`, the
+value tables and the chunk handling are checked against hardware data instead of
+against the same document they came from.
 
 ## Packaging as a real installable app
 

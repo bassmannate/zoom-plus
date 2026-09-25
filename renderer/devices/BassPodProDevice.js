@@ -113,9 +113,13 @@ export class BassPodProDevice {
         // its own budget (see _timeoutFor).
         this._dumpTimeoutMs = options.dumpTimeoutMs;
         this._sysexBuffer = [];
-        // Which program the POD is on, so an edit-buffer dump (which carries no
-        // program number) can still be labelled.
+        // Which program the POD is on as far as the app knows, so an edit-buffer
+        // dump (which carries no program number) can still be labelled, plus the
+        // last one the app sent, for telling the pedal's own moves apart from
+        // echoes of ours.
         this._currentProgramChange = undefined;
+        this._lastSentProgramChange = undefined;
+        this._lastSentProgramChangeAt = undefined;
     }
 
     get isOpen() {
@@ -190,8 +194,25 @@ export class BassPodProDevice {
 
     sendProgramChange(programChangeNumber) {
         if (!this._isOpen) return;
-        this._midi.sendPC(this._midiDevice.outputID, this._channel, programChangeNumber & 0x7f);
-        this._currentProgramChange = programChangeNumber & 0x7f;
+        const value = programChangeNumber & 0x7f;
+        this._midi.sendPC(this._midiDevice.outputID, this._channel, value);
+        this._currentProgramChange = value;
+        this._lastSentProgramChange = value;
+        this._lastSentProgramChangeAt = this._now();
+    }
+
+    /** The program the POD is on, as far as the app knows (sent or received). */
+    get currentProgramChangeNumber() {
+        return this._currentProgramChange;
+    }
+
+    /**
+     * The last program change the app itself sent. Used to recognise an echo:
+     * if a program change we sent comes back (a MIDI "thru" port will certainly
+     * do it, and the POD may), the UI must not read that program a second time.
+     */
+    get lastSentProgramChangeNumber() {
+        return this._lastSentProgramChange;
     }
 
     // --- Programs (sys-ex) -------------------------------------------------
@@ -392,6 +413,16 @@ export class BassPodProDevice {
     // --- Inbound -----------------------------------------------------------
 
     _handleMessage(data) {
+        // A dump that is still being collected owns every data byte that arrives
+        // in the meantime: the continuation chunks of a long sys-ex do not begin
+        // with a status byte (real hardware sends them as plain data), so on
+        // their own they look like nothing at all and would otherwise be thrown
+        // away - leaving the dump half-collected and never answering.
+        if (this._sysexBuffer.length > 0 && data[0] < 0x80) {
+            this._handleSysex(data);
+            return;
+        }
+
         const [messageType, , data1, data2] = getChannelMessage(data);
 
         // Program data only ever arrives by sys-ex, usually in several chunks -
@@ -415,6 +446,17 @@ export class BassPodProDevice {
             for (const listener of this._parameterChangedListeners) listener(this, data1, data2, control);
         }
         else if (messageType === MessageType.PC) {
+            // Our own program change coming back. Unlike a control change there
+            // is nothing to correct on screen - the app asked for this - and
+            // passing it on would make the UI read the same program twice.
+            if (data1 === this._lastSentProgramChange && this._now() - this._lastSentProgramChangeAt < ECHO_SUPPRESSION_MS) {
+                shouldLog(LogLevel.Midi) && console.log(`BassPodProDevice: swallowed echo of program change ${data1}`);
+                return;
+            }
+            // The POD's own program buttons and footswitches send this, so it is
+            // the best answer to "which program is playing" - an edit-buffer read
+            // is labelled with it, and app.js follows it by reading that program.
+            this._currentProgramChange = data1;
             for (const listener of this._programChangedListeners) listener(this, data1, this.programLabelFor(data1));
         }
     }

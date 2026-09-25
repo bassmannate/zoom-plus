@@ -128,6 +128,13 @@
       ]
     },
     {
+      "id": "cabinet",
+      "name": "Cabinet",
+      "controls": [
+        { "id": "cabinet", "label": "Cabinet", "kind": "select", "cc": 71, "min": 0, "max": 15, "table": "cabinets", "default": 0, "hint": "CC 71", "title": "Speaker cabinet/mic model, right after the amp it goes with. The table is in the POD's own cabinet codes - 10 is Bypass (no cabinet) - which is also what a program dump stores in byte 31, so the cabinet a patch was saved with is the one selected here." }
+      ]
+    },
+    {
       "id": "eq",
       "name": "Parametric EQ",
       "controls": [
@@ -141,23 +148,16 @@
       "id": "effect",
       "name": "Effect",
       "controls": [
-        { "id": "effect", "label": "Effect Select", "kind": "select", "cc": 19, "min": 0, "max": 15, "table": "effects", "default": 0, "hint": "CC 19", "title": "Which of the POD's 16 effects is loaded (0-15). NOTE: this control number comes from the PDF's control-number column - the ODS cross-reference lists the effect names but no CC number for the selector - so it's the one mapping here worth confirming against hardware." },
+        { "id": "effect", "label": "Effect Select", "kind": "select", "cc": 19, "min": 0, "max": 15, "table": "effects", "default": 0, "hint": "CC 19", "title": "Which of the POD's 16 effects is loaded. This list is in the POD's own effect codes, not the order its knob cycles through them (Bypass is 10, Orange Phase is 0). A program dump stores the same code in byte 49, and a real dump agrees: the patch named 'Jaco clean chorus' stores 9, and 26 of that POD's 36 programs store 10 - Bypass." },
         { "id": "effectTweak", "label": "Effect Tweak", "kind": "knob", "cc": 1, "min": 0, "max": 126, "default": 0, "hint": "CC 1", "title": "The selected effect's main parameter. 0-126. CC 1 is the mod-wheel position on a general MIDI device; the POD simply uses it as this knob." },
         { "id": "fxLoCut", "label": "FX Lo-Cut", "kind": "knob", "cc": 21, "min": 0, "max": 126, "default": 0, "hint": "CC 21", "title": "High-pass filter on the effect path, off to 1kHz. 0-126." }
-      ]
-    },
-    {
-      "id": "cabinet",
-      "name": "Cabinet",
-      "controls": [
-        { "id": "cabinet", "label": "Cabinet", "kind": "select", "cc": 71, "min": 0, "max": 15, "table": "cabinets", "default": 0, "hint": "CC 71", "title": "Speaker cabinet/mic model. 16 cabinets (0-15). Value 10 is Bypass - the cabinet simulation off." }
       ]
     },
     {
       "id": "gate",
       "name": "Noise Gate",
       "controls": [
-        { "id": "noiseGate", "label": "Gate", "kind": "knob", "cc": 22, "min": 0, "max": 127, "default": 0, "hint": "CC 22", "title": "Noise gate amount. 0-127 here, unlike the other knobs: values 0-63 switch the gate off and 64-127 switch it on, with the position inside each half setting the level." }
+        { "id": "noiseGate", "label": "Gate", "kind": "knob", "cc": 22, "min": 0, "max": 127, "default": 0, "hint": "CC 22", "title": "Noise gate on/off. This knob is 0-127 unlike the others because it is a switch: 0-63 is off and 64-127 is on. How hard the gate works is a separate parameter (threshold and decay are sys-ex-only on the POD, with no live control change)." }
       ]
     },
     {

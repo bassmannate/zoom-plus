@@ -268,6 +268,7 @@ function wireDeviceEvents(dev) {
     activeProgramNumber = programNumberFor(programChangeNumber);
     highlightActiveProgram();
     status(`Pedal switched to ${text}.`);
+    followPedalProgramChange(programChangeNumber, text);
   });
 
   // Everything the control changes above cannot tell us: the patch list's
@@ -377,6 +378,51 @@ async function selectProgramFromList(programNumber) {
     return;
   }
   status(`Loaded ${label}${loaded.name ? " " + loaded.name : ""} from the POD.`);
+}
+
+/**
+ * The POD was changed from its own front panel (or by some other MIDI device).
+ *
+ * It sends a program change when that happens, but not the program's contents,
+ * so without this the panel would carry on showing the patch you were on before
+ * you stepped on the POD. The program is read back and painted on; nothing is
+ * sent, because the POD has already switched by itself.
+ */
+async function followPedalProgramChange(programChangeNumber, label) {
+  if (!device?.isOpen) return;
+  // An echo of a program change the app sent never reaches here: the adapter
+  // swallows it, because whichever click sent it is reading that program already.
+
+  const programNumber = programNumberFor(programChangeNumber);
+  if (programNumber === null) {
+    // Manual mode and the tuner aren't stored programs, so nothing on the panel
+    // describes them - better to say so than to leave a stale patch on screen.
+    forgetPanelValues(`POD switched to ${label} - no program is loaded, so there is nothing to read back.`);
+    return;
+  }
+
+  status(`POD switched to ${label} - reading it…`);
+  try {
+    const loaded = await device.requestProgramDump(programNumber);
+    status(loaded
+      ? `Panel now showing ${label}${loaded.name ? " " + loaded.name : ""}.`
+      : `The POD switched to ${label}, but it did not send that program back.`, !loaded);
+  } catch (e) {
+    status(`Could not read ${label} from the POD: ${e.message}`, true);
+  }
+}
+
+/**
+ * Puts every control back to "unknown" (dimmed) without rebuilding the panel.
+ * Used when the POD leaves program territory: the values on screen belonged to
+ * the program it was on, and leaving them there would misrepresent the pedal.
+ */
+function forgetPanelValues(message) {
+  for (const handle of panelControls.values()) handle.setUnset?.();
+  activeProgramNumber = null;
+  highlightActiveProgram();
+  els.crcIndicator.textContent = `${panelControls.size} live controls`;
+  if (message) els.panelNote.textContent = message;
 }
 
 /**
@@ -909,6 +955,9 @@ function buildPanelControl(control, data) {
         onClick: () => {
           if (!device?.isOpen) return;
           device.sendProgramChange(control.pc);
+          // Manual and the tuner aren't stored programs, so whatever the panel
+          // was showing stopped describing the POD the moment it switched.
+          forgetPanelValues(`POD switched to ${control.label} - no program is loaded, so there is nothing to read back.`);
           status(`${control.label} sent to the pedal.`);
         },
       });
