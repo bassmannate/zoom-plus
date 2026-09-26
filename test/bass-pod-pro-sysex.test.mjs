@@ -37,6 +37,7 @@ import {
   valueFromField,
 } from "../renderer/devices/bassPodProSysex.js";
 import { BassPodProDevice } from "../renderer/devices/BassPodProDevice.js";
+import { formatByBands } from "../renderer/ui/controls.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const profileData = JSON.parse(readFileSync(path.join(repoRoot, "renderer/data/bass-pod-pro.json"), "utf8"));
@@ -529,4 +530,62 @@ test("fixture: every program decodes inside the documented ranges", () => {
       }
     }
   }
+});
+
+test("fixture: the compressor and AIR parameters decode from real programs", () => {
+  const programs = capturedAllPrograms();
+  const valuesAt = (index) => readProgramValues(programs[index], layout);
+
+  // CC 18 Compress (the front-panel knob), 42 Ratio, 51 Attack, 63 Release and
+  // 72 AIR level. The POD never transmits any of these - its sys-ex document
+  // marks the compressor parameters NO TRANSMIT and AIR has no front-panel knob
+  // at all - so a dump is the only way the panel can ever learn them.
+  const expected = [
+    [0, "Star Spangled Ja", 46, 50, 94, 57, 68],
+    [1, "Jaco clean choru", 102, 78, 51, 57, 68],
+    [2, "Jaco Tone", 126, 0, 94, 57, 68],
+    [12, "Eighties", 110, 30, 83, 57, 64],
+    [35, "Amp 360", 0, 30, 83, 57, 64],
+  ];
+  for (const [index, name, compress, ratio, attack, release, air] of expected) {
+    const values = valuesAt(index);
+    assert.equal(readProgram(programs[index], layout).name, name);
+    assert.equal(values.get(18), compress, `${name}: compress`);
+    assert.equal(values.get(42), ratio, `${name}: ratio`);
+    assert.equal(values.get(51), attack, `${name}: attack`);
+    assert.equal(values.get(63), release, `${name}: release`);
+    assert.equal(values.get(72), air, `${name}: AIR level`);
+  }
+
+  // Ratio and attack reach past 63 in this capture, which only works because
+  // those two are stored in 7 bits and read back as-is - no doubling.
+  const attacks = programs.map((program) => readProgramValues(program, layout).get(51));
+  const ratios = programs.map((program) => readProgramValues(program, layout).get(42));
+  assert.ok(Math.max(...attacks) > 63, `attack tops out at ${Math.max(...attacks)}`);
+  assert.ok(Math.max(...ratios) > 63, `ratio tops out at ${Math.max(...ratios)}`);
+
+  // AIR is 6-bit stored and doubled on the way out, so it can never pass 126.
+  const airLevels = programs.map((program) => readProgramValues(program, layout).get(72));
+  assert.equal(Math.max(...airLevels), 68, "the highest AIR level in this capture");
+});
+
+test("fixture: the ratio readout names the band the POD would show", () => {
+  const control = profileData.groups
+    .flatMap((group) => group.controls)
+    .find((c) => c.id === "compRatio");
+  assert.ok(control?.valueBands, "the ratio control declares its bands in the profile");
+
+  const named = capturedAllPrograms()
+    .map((program) => readProgramValues(program, layout).get(42))
+    .map((value) => formatByBands(value, control.valueBands));
+
+  // Real stored values, including ones that fall between the band edges - which
+  // is the whole reason the knob sends what it holds instead of snapping.
+  assert.equal(named[0], "8:1", "1A stores 50, exactly the 8:1 edge");
+  assert.equal(named[1], "12:1 (78)", "1B stores 78, inside the 12:1 band");
+  assert.equal(named[12], "3.3:1 (30)", "the 'Eighties' program stores 30, inside 3.3:1");
+
+  assert.deepEqual([...new Set(named)].sort(), [
+    "12:1 (78)", "2:1", "2:1 (1)", "3.3:1 (30)", "3.3:1 (32)", "8:1", "Inf:1 (104)",
+  ].sort(), "every ratio in the capture lands in a band the POD names");
 });

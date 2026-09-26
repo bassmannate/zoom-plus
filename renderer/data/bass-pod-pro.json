@@ -123,15 +123,25 @@
         { "id": "bass", "label": "Bass", "kind": "knob", "cc": 14, "min": 0, "max": 126, "default": 0, "hint": "CC 14", "title": "Low shelf of the amp model's tone stack. 0-126." },
         { "id": "middle", "label": "Middle", "kind": "knob", "cc": 15, "min": 0, "max": 126, "default": 0, "hint": "CC 15", "title": "Mid band of the amp model's tone stack. 0-126." },
         { "id": "treble", "label": "Treble", "kind": "knob", "cc": 16, "min": 0, "max": 126, "default": 0, "hint": "CC 16", "title": "High shelf of the amp model's tone stack. 0-126." },
-        { "id": "channelVolume", "label": "Channel Vol", "kind": "knob", "cc": 17, "min": 0, "max": 126, "default": 0, "hint": "CC 17", "title": "Volume of the selected amp channel. 0-126." },
-        { "id": "compress", "label": "Compress", "kind": "knob", "cc": 18, "min": 0, "max": 126, "default": 0, "hint": "CC 18", "title": "Compression amount. Scales the compressor's threshold; the ratio/attack/decay themselves are sys-ex-only parameters and aren't live CC controls on the POD." }
+        { "id": "channelVolume", "label": "Channel Vol", "kind": "knob", "cc": 17, "min": 0, "max": 126, "default": 0, "hint": "CC 17", "title": "Volume of the selected amp channel. 0-126." }
       ]
     },
     {
       "id": "cabinet",
       "name": "Cabinet",
       "controls": [
-        { "id": "cabinet", "label": "Cabinet", "kind": "select", "cc": 71, "min": 0, "max": 15, "table": "cabinets", "default": 0, "hint": "CC 71", "title": "Speaker cabinet/mic model, right after the amp it goes with. The table is in the POD's own cabinet codes - 10 is Bypass (no cabinet) - which is also what a program dump stores in byte 31, so the cabinet a patch was saved with is the one selected here." }
+        { "id": "cabinet", "label": "Cabinet", "kind": "select", "cc": 71, "min": 0, "max": 15, "table": "cabinets", "default": 0, "hint": "CC 71", "title": "Speaker cabinet/mic model, right after the amp it goes with. The table is in the POD's own cabinet codes - 10 is Bypass (no cabinet) - which is also what a program dump stores in byte 31, so the cabinet a patch was saved with is the one selected here." },
+        { "id": "airLevel", "label": "AIR Level", "kind": "knob", "cc": 72, "min": 0, "max": 126, "default": 0, "hint": "CC 72", "title": "AIR level: a Line 6 cabinet 'air' control, 0 to +24 dB. There is no knob for it on the POD's front panel - it lives in the pedal's cabinet pages - and the pedal stores it in 6 bits, so it is 0-126 here (127 is accepted but is the same stored step as 126) and a patch dump reads back as double the stored value." }
+      ]
+    },
+    {
+      "id": "compressor",
+      "name": "Compressor",
+      "controls": [
+        { "id": "compress", "label": "Compress", "kind": "knob", "cc": 18, "min": 0, "max": 126, "default": 0, "hint": "CC 18", "title": "The POD's front-panel Compress knob: how much compression the compressor applies. It moves the compressor's level and threshold together - the separate threshold parameter (program byte 26) has no control-change number at all, so it can only ever be read from a patch dump." },
+        { "id": "compRatio", "label": "Ratio", "kind": "knob", "cc": 42, "min": 0, "max": 127, "default": 0, "hint": "CC 42", "valueBands": [ { "from": 0, "label": "2:1" }, { "from": 25, "label": "3.3:1" }, { "from": 50, "label": "8:1" }, { "from": 75, "label": "12:1" }, { "from": 100, "label": "Inf:1" } ], "title": "Compression ratio. The POD displays 2:1, 3.3:1, 8:1, 12:1 or Inf:1, with band edges at 0, 25, 50, 75 and 100 - but it is one continuous 0-127 control, and real patches store values in between (30, 104), so the knob sends exactly what it holds and the readout just names the band." },
+        { "id": "compAttack", "label": "Attack", "kind": "knob", "cc": 51, "min": 0, "max": 127, "default": 0, "hint": "CC 51", "title": "How fast the compressor clamps down. 0-127. The POD never reports this one - its sys-ex document marks the individual compressor parameters NO TRANSMIT - so it fills in from a patch dump and stays dimmed until then." },
+        { "id": "compRelease", "label": "Release", "kind": "knob", "cc": 63, "min": 0, "max": 127, "default": 0, "hint": "CC 63", "title": "How fast the compressor lets go - 'decay' in the POD's own documentation. 0-127, and like the rest of the compressor parameters it is never reported by the pedal, so it comes from a patch dump." }
       ]
     },
     {

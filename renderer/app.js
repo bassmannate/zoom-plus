@@ -7,6 +7,7 @@ import {
   buildKnobUnit,
   buildSelectUnit,
   buildToggleUnit,
+  formatByBands,
   setKnobVisual,
   wireKnobDrag,
 } from "./ui/controls.js";
@@ -967,6 +968,9 @@ function buildPanelControl(control, data) {
         ...base,
         min: control.min ?? 0,
         max: control.max ?? 127,
+        // A control whose hardware display is banded (the compressor ratio, say)
+        // shows the band's name instead of a bare number.
+        formatValue: control.valueBands ? (value) => formatByBands(value, control.valueBands) : undefined,
         onChange: (value) => send(value),
       });
   }

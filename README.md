@@ -83,6 +83,13 @@ the app drives it live rather than uploading a patch blob. What works today:
   channel volume, compress, effect tweak, FX lo-cut, noise gate, parametric
   EQ (freq/Q/gain) and mid sweep, plus the digital output level and the
   D.I. effects switch
+- ✅ The parameters with no knob of their own on the POD: AIR level (in the
+  Cabinet section) and the compressor's ratio, attack and release. Those are
+  also the ones the POD never *reports* - its documentation marks them
+  NO TRANSMIT - so they stay dimmed until a patch dump has been read. The
+  ratio's readout names the band the POD displays (2:1, 3.3:1, 8:1, 12:1,
+  Inf:1) while the knob still holds the exact stored value: real patches store
+  30 and 104, and a five-position control would quietly rewrite those on Sync.
 - ✅ Manual, Tuner and the 36 internal programs (1A-9D) via program change
 - ✅ The pedal's own knob movements and program changes are reflected back in
   the UI as they happen
@@ -134,6 +141,10 @@ The amp, cabinet and effect tables were checked against a dump of a real POD's
   top of those ranges, and every program in that dump decodes inside it. If a
   knob ever reads back at exactly half what the POD's display shows, that
   conversion is the line to change (`sysexLayout.fields[].scale`).
+- Not every parameter is 6-bit, though, and the dump settles which are which:
+  the noise gate and the individual compressor parameters are 7-bit and use the
+  full 0-127. Attack reaches 127 in that capture and ratio 104, neither of
+  which a 6-bit field could hold.
 
 One more thing the hardware made clear: a long dump does not arrive as a single
 sys-ex message. The all-programs reply came back as 23 messages of 256 bytes,
@@ -149,10 +160,15 @@ app stitches them back together before parsing (see `_handleSysex()`).
   (`renderer/devices/bassPodProSysex.js` plus the `sysexLayout` byte map in
   `renderer/data/bass-pod-pro.json`); the write side needs the same 80 bytes
   nibble-encoded again, with the version byte the POD expects.
-- Bass POD Pro: the sys-ex-only parameters (compressor ratio/attack/decay,
-  gate threshold and decay, wah, volume pedal, AIR level, D.I. alignment and
-  mix) are decoded but have no controls in the panel yet - they're the extra
-  entries in `sysexLayout.fields`.
+- Bass POD Pro: the remaining decoded-but-not-on-the-panel parameters - gate
+  threshold (CC 23) and decay (CC 24), wah (CC 4/44/45), volume pedal
+  (CC 7/46/47) and D.I. alignment/mix (CC 74/75). They are already in
+  `sysexLayout.fields` and already decode from a dump, so each one is a
+  profile entry away.
+- Bass POD Pro: the compressor's *separate* threshold (program byte 26) has no
+  control-change number at all in the Line 6 document, so it can never be set
+  from this panel - only read, and only once something shows dump-only values.
+  Setting it would need the sys-ex write path above.
 - Bass POD Pro: confirm on hardware that the POD announces program changes made
   on its own front panel (the sys-ex PDF says it transmits 0 = Manual, 1-36,
   Tuner = 37; capturing it needs somebody to step on the pedal). The app

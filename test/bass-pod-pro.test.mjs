@@ -127,21 +127,33 @@ test("control map: every control-change number is unique, in range and documente
     assert.equal(profileData.valueTables[control.table].length, 16, `${id}'s table has one name per value`);
   }
 
-  // Continuous controls stop at 126 (0x7E), not 127 - the ODS documents the
-  // range as 00-7e for everything except the noise gate and the DI switch.
-  const continuous = [...lookup.values()].filter((c) => c.kind === "knob" && c.id !== "noiseGate");
-  assert.ok(continuous.length > 0);
-  for (const control of continuous) {
-    assert.equal(control.max, 126, `${control.id} should top out at 126`);
+  // Two kinds of continuous control, and the difference is real. Most of the
+  // POD's parameters are stored in 6 bits, so their control-change range stops
+  // at 126 (0x7E) - the ODS documents "00-7e" for those - while the noise gate
+  // (a switch, not a level) and the individual compressor parameters are 7-bit
+  // and use the full 0-127 (0x7F) that the sys-ex PDF lists for them.
+  const sixBit = ["drive", "bass", "middle", "treble", "channelVolume", "compress",
+    "effectTweak", "fxLoCut", "paramFreq", "paramQ", "paramGain", "middleSweep",
+    "digOutLevel", "airLevel"];
+  for (const id of sixBit) {
+    const control = [...lookup.values()].find((c) => c.id === id);
+    assert.ok(control, `${id} is in the map`);
+    assert.equal(control.max, 126, `${id} is stored in 6 bits, so it tops out at 126`);
   }
-  assert.equal(lookup.get(22).kind, "knob");
-  assert.equal(lookup.get(22).max, 127, "the noise gate uses the full 0-127");
+
+  const sevenBit = ["noiseGate", "compRatio", "compAttack", "compRelease"];
+  for (const id of sevenBit) {
+    const control = [...lookup.values()].find((c) => c.id === id);
+    assert.ok(control, `${id} is in the map`);
+    assert.equal(control.max, 127, `${id} is 7-bit and uses the full 0-127`);
+  }
 
   // The handful of control numbers worth pinning down by name.
   const expected = { ampModel: 12, drive: 13, bass: 14, middle: 15, treble: 16,
     channelVolume: 17, compress: 18, effect: 19, effectTweak: 1, fxLoCut: 21,
     noiseGate: 22, paramFreq: 25, paramQ: 26, paramGain: 27, middleSweep: 28,
-    digOutLevel: 9, applyFxToDi: 64, cabinet: 71 };
+    digOutLevel: 9, applyFxToDi: 64, cabinet: 71, airLevel: 72,
+    compRatio: 42, compAttack: 51, compRelease: 63 };
   for (const [id, cc] of Object.entries(expected)) {
     const control = [...lookup.values()].find((c) => c.id === id);
     assert.ok(control, `${id} is in the map`);

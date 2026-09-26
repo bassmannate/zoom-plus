@@ -11,6 +11,35 @@ export function clamp(value, min, max) {
 }
 
 /**
+ * Names a value the way the hardware displays it, using the bands a control
+ * declares in its profile entry.
+ *
+ * The POD's compression ratio is why this exists: one continuous 0-127 control
+ * that the pedal shows as 2:1, 3.3:1, 8:1, 12:1 or Inf:1, with a new band
+ * starting at 0, 25, 50, 75 and 100. A value that falls between bands keeps its
+ * number - a patch that really stores 30 reads "3.3:1 (30)" instead of being
+ * rounded to the band start, because the knob sends exactly what it holds.
+ *
+ * @param value The control's current value
+ * @param bands [{ from, label }] - the highest "from" that is <= value wins, so
+ *              the order in the profile doesn't matter. A band without "from"
+ *              acts as the fallback.
+ */
+export function formatByBands(value, bands) {
+    if (!Array.isArray(bands) || bands.length === 0) return String(value);
+    let match;
+    for (const band of bands) {
+        const from = band.from ?? 0;
+        if (value >= from && (match === undefined || from > (match.from ?? 0))) match = band;
+    }
+    if (!match) return String(value);
+    const name = match.label ?? String(value);
+    // At a band's own edge the name says everything; inside a band the number
+    // stays visible, so a stored value of 30 isn't silently shown as 25.
+    return (match.from ?? 0) === value ? name : `${name} (${value})`;
+}
+
+/**
  * Positions a knob's arc and pointer.
  * @param min Lowest value the knob can show (0 for everything in this app)
  * @param max Highest value

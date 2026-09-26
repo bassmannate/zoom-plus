@@ -17,6 +17,7 @@ import {
   buildSelectUnit,
   buildToggleUnit,
   clamp,
+  formatByBands,
   setKnobVisual,
 } from "../renderer/ui/controls.js";
 
@@ -200,4 +201,44 @@ test("clamp keeps values inside the control's documented range", () => {
   assert.equal(clamp(200, 0, 126), 126);
   assert.equal(clamp(-5, 0, 126), 0);
   assert.equal(clamp(64, 0, 126), 64);
+});
+
+test("formatByBands: a banded control names its value the way the hardware shows it", () => {
+  const bands = [
+    { from: 0, label: "2:1" },
+    { from: 25, label: "3.3:1" },
+    { from: 50, label: "8:1" },
+    { from: 75, label: "12:1" },
+    { from: 100, label: "Inf:1" },
+  ];
+  assert.equal(formatByBands(0, bands), "2:1");
+  assert.equal(formatByBands(25, bands), "3.3:1");
+  assert.equal(formatByBands(100, bands), "Inf:1");
+  assert.equal(formatByBands(127, bands), "Inf:1 (127)", "past the last edge the number stays visible");
+  assert.equal(formatByBands(30, bands), "3.3:1 (30)", "a value between two edges is not rounded away");
+  assert.equal(formatByBands(24, bands), "2:1 (24)");
+
+  // The order the bands are listed in doesn't matter, and a control with no
+  // bands - or a band table that says nothing useful - falls back to the number.
+  assert.equal(formatByBands(60, [...bands].reverse()), "8:1 (60)");
+  assert.equal(formatByBands(7, undefined), "7");
+  assert.equal(formatByBands(7, []), "7");
+  assert.equal(formatByBands(7, [{ label: "only" }]), "only (7)", "a band with no 'from' starts at 0");
+});
+
+test("knob: a banded control shows the band name, and setValue keeps the exact number", () => {
+  const ratio = buildKnobUnit({
+    label: "Ratio",
+    min: 0,
+    max: 127,
+    value: 50,
+    formatValue: (value) => formatByBands(value, [{ from: 0, label: "2:1" }, { from: 50, label: "8:1" }]),
+  });
+  assert.equal(ratio.el.querySelector(".knob-value").textContent, "8:1");
+
+  // A patch that stored 30 isn't displayed as the 25 it sits near, and Sync
+  // sends back the 30 the patch actually holds.
+  ratio.setValue(30);
+  assert.equal(ratio.el.querySelector(".knob-value").textContent, "2:1 (30)");
+  assert.equal(ratio.getValue(), 30);
 });
